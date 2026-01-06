@@ -25,7 +25,7 @@ function formatUnits(
 }
 
 async function main() {
-  console.log("--- 7k-SDK Token Swap Script ---");
+  console.log("--- 7k-SDK Token Swap Execution Script ---");
 
   // 1. Setup User Address
   const secretKey = process.env.SECRET_KEY;
@@ -129,19 +129,24 @@ async function main() {
 
     if (res.effects.status.status === "failure") {
       console.error("Dry-run failed:", res.effects.status.error);
-    } else {
-      console.log("Dry-run successful!");
+      return;
+    }
 
-      // 7. Actually Send Transaction (Commented out by default for safety in test script)
-      /*
-      console.log("\nSending real transaction...");
-      const result = await client.signAndExecuteTransaction({
-        signer: keypair,
-        transaction: tx,
-        options: { showEffects: true },
-      });
-      console.log("Swap successful! Transaction Digest:", result.digest);
-      */
+    console.log("Dry-run successful!");
+
+    // 7. Actually Send Transaction
+    console.log("\nSending real transaction...");
+    const result = await client.signAndExecuteTransaction({
+      signer: keypair,
+      transaction: tx,
+      options: { showEffects: true, showEvents: true },
+    });
+
+    if (result.effects?.status.status === "success") {
+      console.log(`\n✅ Swap successful!`);
+      console.log(`Transaction Digest: ${result.digest}`);
+    } else {
+      console.error(`\n❌ Transaction failed:`, result.effects?.status.error);
     }
 
     console.log("\nDone!");
