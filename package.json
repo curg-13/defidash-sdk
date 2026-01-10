@@ -12,8 +12,8 @@
     "test:flash-loan": "ts-node tests/1_scallop_flash-loan-test.ts",
     "test:swap": "ts-node tests/3_7k_swap.ts",
     "test:swap-execute": "ts-node tests/3_7k_swap_execute.ts",
-    "test:leverage": "ts-node tests/4_leverage_strategy.ts",
-    "test:version": "ts-node tests/1_scallop_check_version.ts"
+    "test:leverage": "ts-node tests/4_leverage_strategy_dryrun.ts",
+    "test:leverage-exec": "ts-node tests/4_leverage_strategy_exec.ts"
   },
   "keywords": [],
   "author": "",

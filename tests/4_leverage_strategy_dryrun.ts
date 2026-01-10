@@ -185,14 +185,14 @@ async function main() {
         [LENDING_MARKET_TYPE],
         suiClient
       );
-      await suilendClient.refreshAll(tx, obligation);
+      // await suilendClient.refreshAll(tx, obligation);
     } else {
       // New obligation in PTB - refresh reserve prices
       console.log("- Refreshing reserve prices for new obligation...");
-      await suilendClient.refreshAll(tx, null as any, [
-        SUI_COIN_TYPE,
-        USDC_COIN_TYPE,
-      ]);
+      // await suilendClient.refreshAll(tx, null as any, [
+      //   SUI_COIN_TYPE,
+      //   USDC_COIN_TYPE,
+      // ]);
     }
 
     // Borrow USDC to repay flashloan
