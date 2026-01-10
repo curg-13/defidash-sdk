@@ -5,7 +5,7 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { getFullnodeUrl, SuiClient } from "@mysten/sui/client";
 import { ScallopFlashLoanClient } from "../src/lib/scallop";
 
-async function testSimpleFlashLoan() {
+async function testFlashLoanWithCustomClient() {
   // 1. Initial Setup
   const secretKey = process.env.SECRET_KEY;
   const SUI_FULLNODE_URL =
@@ -31,21 +31,29 @@ async function testSimpleFlashLoan() {
 
   const client = new SuiClient({ url: SUI_FULLNODE_URL });
 
-  // 2. Create Custom Flash Loan Client (uses latest protocol package by default)
-  const flashLoanClient = new ScallopFlashLoanClient();
+  // 2. Create Custom Flash Loan Client with LATEST protocol package
+  // This address is from Move Registry - the latest version
+  const LATEST_PROTOCOL_PKG =
+    "0xd384ded6b9e7f4d2c4c9007b0291ef88fbfed8e709bce83d2da69de2d79d013d";
+
+  console.log("\nUsing latest protocol package:", LATEST_PROTOCOL_PKG);
+
+  const flashLoanClient = new ScallopFlashLoanClient({
+    protocolPkg: LATEST_PROTOCOL_PKG,
+    // version and market remain default from API
+  });
 
   // 3. Create Transaction
   const tx = new Transaction();
   tx.setSender(sender);
 
-  // 4. 테스트 파라미터 설정
-  const loanAmount = 1 * 10 ** 9; // 1 SUI (Mist 단위)
+  const loanAmount = 1_000_000_000; // 1 SUI
   const coinName = "sui";
 
-  console.log(`Testing Flash Loan for ${loanAmount / 1e9} SUI...`);
+  console.log(`\nTesting Flash Loan for ${loanAmount / 1e9} SUI...`);
 
   try {
-    // 5. [Step 1] 플래시 론 빌리기
+    // 4. Borrow Flash Loan
     const [loanCoin, receipt] = flashLoanClient.borrowFlashLoan(
       tx,
       loanAmount,
@@ -53,16 +61,28 @@ async function testSimpleFlashLoan() {
     );
 
     /**
-     * [이 지점에 나중에 스왑(Swap)이나 레버리지 로직이 들어갑니다]
-     * 예시:
-     * const [splitCoin] = tx.splitCoins(loanCoin, [tx.pure.u64(amount)]);
-     * // ... do something with splitCoin
+     * [이 지점에 스왑/레버리지 로직 추가]
+     * 예: const swappedCoin = await metaAg.swap({ ... tx, coinIn: loanCoin });
      */
 
-    // 6. [Step 2] 플래시 론 갚기
+    // 5. Repay Flash Loan
     flashLoanClient.repayFlashLoan(tx, loanCoin, receipt, coinName);
 
-    // 7. 트랜잭션 전송 및 실행
+    // 6. Dry Run first
+    console.log("\nRunning dry-run...");
+    const dryRunResult = await client.dryRunTransactionBlock({
+      transactionBlock: await tx.build({ client }),
+    });
+
+    if (dryRunResult.effects.status.status === "failure") {
+      console.error("❌ Dry-run failed:", dryRunResult.effects.status.error);
+      return;
+    }
+
+    console.log("✅ Dry-run successful!");
+
+    // 7. Execute Transaction
+    console.log("\nExecuting transaction...");
     const result = await client.signAndExecuteTransaction({
       transaction: tx,
       signer: keypair,
@@ -75,10 +95,10 @@ async function testSimpleFlashLoan() {
       console.error("❌ Flash Loan Failed:", result.effects?.status.error);
     }
   } catch (error) {
-    console.error("❌ Flash Loan Failed:", error);
+    console.error("❌ Error:", error);
   }
 }
 
-testSimpleFlashLoan().catch((err) => {
-  console.error("Unhandled error in testSimpleFlashLoan:", err);
+testFlashLoanWithCustomClient().catch((err) => {
+  console.error("Unhandled error:", err);
 });

@@ -1,6 +1,5 @@
 import "dotenv/config";
 import { getFullnodeUrl, SuiClient } from "@mysten/sui/client";
-import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import {
   SuilendClient,
@@ -8,7 +7,7 @@ import {
   LENDING_MARKET_TYPE,
 } from "@suilend/sdk";
 import { MetaAg } from "@7kprotocol/sdk-ts";
-import { Scallop, ScallopTxBlock } from "@scallop-io/sui-scallop-sdk";
+import { ScallopBuilder } from "../src/lib/scallop";
 
 const SUI_FULLNODE_URL =
   process.env.SUI_FULLNODE_URL || getFullnodeUrl("mainnet");
@@ -46,9 +45,12 @@ async function main() {
   console.log(`Using Wallet Address: ${userAddress}`);
 
   const suiClient = new SuiClient({ url: SUI_FULLNODE_URL });
-  const scallopSDK = new Scallop({ secretKey, networkType: "mainnet" });
-  await scallopSDK.init();
-  const builder = await scallopSDK.createScallopBuilder();
+
+  // Initialize our custom Scallop Builder (no SDK dependency!)
+  const scallopBuilder = new ScallopBuilder({
+    client: suiClient,
+    signer: keypair,
+  });
 
   const suilendClient = await SuilendClient.initialize(
     LENDING_MARKET_ID,
@@ -73,6 +75,7 @@ async function main() {
   console.log(
     `- Target Leverage Amount: ${formatUnits(leverageSuiAmount, 9)} SUI`
   );
+  console.log(`- Flash Loan Fee: 0% (Scallop currently charges no fee)`);
 
   try {
     // 3. Estimate Flashloan Amount (SUI -> USDC)
@@ -89,7 +92,6 @@ async function main() {
       (a, b) => Number(b.amountOut) - Number(a.amountOut)
     )[0];
 
-    // We need SLIGHTLY MORE than the quote to ensure we can swap back to the target SUI
     // Adding a 2% buffer for slippage and fees
     const flashloanAmount = BigInt(
       Math.floor(Number(quoteForLoan.amountOut) * 1.02)
@@ -98,30 +100,61 @@ async function main() {
       `Estimated USDC needed: ${formatUnits(flashloanAmount, 6)} USDC`
     );
 
-    // 4. Start Transaction
-    const tx = builder.createTxBlock();
-    tx.setSender(userAddress);
-    console.log("Transaction Object Keys:", Object.keys(tx));
+    // 4. Create Transaction using Scallop Builder pattern
+    const scallopTxBlock = scallopBuilder.createTxBlock();
+    scallopTxBlock.setSender(userAddress);
+    const suiTxBlock = scallopTxBlock.txBlock; // Access underlying Transaction
+
+    // IMPORTANT: Refresh Suilend oracle prices FIRST (before any operations)
+    // This must be the first operation in the PTB to avoid stale oracle errors
+    console.log("\nStep 0: Refreshing Suilend oracle prices...");
+    const obligationOwnerCaps = await SuilendClient.getObligationOwnerCaps(
+      userAddress,
+      [LENDING_MARKET_TYPE],
+      suiClient
+    );
+    const existingObligationOwnerCap = obligationOwnerCaps[0];
+    let obligation: any = null;
+    let obligationOwnerCapId: any;
+    let obligationId: string;
+
+    if (existingObligationOwnerCap) {
+      obligationOwnerCapId = existingObligationOwnerCap.id;
+      obligationId = existingObligationOwnerCap.obligationId;
+      obligation = await SuilendClient.getObligation(
+        obligationId,
+        [LENDING_MARKET_TYPE],
+        suiClient
+      );
+      await suilendClient.refreshAll(suiTxBlock, obligation);
+      console.log(`- Using existing Obligation ID: ${obligationId}`);
+    } else {
+      console.log("- No existing obligation found, creating new one in PTB...");
+      const newObligationOwnerCap = suilendClient.createObligation(suiTxBlock);
+      obligationOwnerCapId = newObligationOwnerCap as any;
+      obligationId = "";
+      await suilendClient.refreshAll(suiTxBlock, null as any, [
+        SUI_COIN_TYPE,
+        USDC_COIN_TYPE,
+      ]);
+    }
 
     // A. Flash loan USDC from Scallop
     console.log(
       `\nStep 1: Scallop Flashloan ${formatUnits(flashloanAmount, 6)} USDC...`
     );
-    const [loanCoin, receipt] = await tx.borrowFlashLoan(
-      Number(flashloanAmount),
+    const [loanCoin, receipt] = scallopTxBlock.borrowFlashLoan(
+      flashloanAmount,
       "usdc"
     );
 
     // B. Swap USDC to SUI via 7k-SDK
     console.log("Step 2: 7k-SDK Swap USDC -> SUI...");
-    const swapQuotes = await metaAg.quote(
-      {
-        amountIn: flashloanAmount.toString(),
-        coinTypeIn: USDC_COIN_TYPE,
-        coinTypeOut: SUI_COIN_TYPE,
-      },
-      { sender: userAddress }
-    );
+    const swapQuotes = await metaAg.quote({
+      amountIn: flashloanAmount.toString(),
+      coinTypeIn: USDC_COIN_TYPE,
+      coinTypeOut: SUI_COIN_TYPE,
+    });
 
     const bestSwapQuote = swapQuotes.sort(
       (a, b) =>
@@ -134,37 +167,19 @@ async function main() {
         quote: bestSwapQuote,
         signer: userAddress,
         coinIn: loanCoin,
-        tx: tx.txBlock, // Use the underlying Transaction from Scallop
+        tx: suiTxBlock, // Use underlying Transaction for 7k-SDK
       },
       100
     ); // 1% slippage
 
     // C. Suilend Operations
     console.log("Step 3: Suilend Deposit & Borrow...");
+    // Get user's existing equity SUI from gas coin
+    const userSui = suiTxBlock.splitCoins(suiTxBlock.gas, [
+      suiTxBlock.pure.u64(initialEquitySui),
+    ]);
 
-    // Find existing Obligation
-    const obligationOwnerCaps = await SuilendClient.getObligationOwnerCaps(
-      userAddress,
-      [LENDING_MARKET_TYPE],
-      suiClient
-    );
-    const obligationOwnerCap = obligationOwnerCaps[0];
-
-    if (!obligationOwnerCap) {
-      throw new Error(
-        "No Suilend obligation found. Please create one using 'npm run test:suilend-deposit' first."
-      );
-    }
-
-    const obligationOwnerCapId = obligationOwnerCap.id;
-    const obligationId = obligationOwnerCap.obligationId;
-    console.log(`- Using Obligation ID: ${obligationId}`);
-
-    // Get user's existing equity SUI from gas coin using the underlying txBlock
-    const suiTxBlock = tx.txBlock;
-    const userSui = suiTxBlock.splitCoins(suiTxBlock.gas, [initialEquitySui]);
-
-    // Merge with swapped SUI (both are now from the same txBlock context)
+    // Merge with swapped SUI
     suiTxBlock.mergeCoins(userSui, [swappedSui]);
 
     // Calculate total deposit amount
@@ -173,70 +188,59 @@ async function main() {
       `- Total SUI to deposit: ~${formatUnits(totalDepositAmount, 9)} SUI`
     );
 
-    // First, deposit liquidity and get cTokens
-    // Note: depositIntoObligation expects a string amount and handles coin selection internally.
-    // Since we have a coin object from PTB, we need to use a different approach.
-    // We'll use depositLiquidityAndGetCTokens with the amount, then manually handle the deposit.
-    // However, for now, let's try passing the total amount as string and let SDK handle it.
-    // But the SDK selects coins from wallet, not from PTB.
-    // Alternative: Skip the SUI from gas and just use the swapped USDC->SUI amount for deposit.
+    // Refresh oracle prices again right before deposit
+    // (Swap operations may have triggered oracle staleness check)
+    if (obligation) {
+      await suilendClient.refreshAll(suiTxBlock, obligation);
+    } else {
+      await suilendClient.refreshAll(suiTxBlock, null as any, [
+        SUI_COIN_TYPE,
+        USDC_COIN_TYPE,
+      ]);
+    }
 
-    // For simplicity in this iteration, let's deposit just the swapped SUI (not split from gas)
-    // and provide the initialEquitySui as separate collateral in a different manner.
-    // Let's simplify: deposit the merged coin using low-level moveCall
-
-    // Get the reserve for SUI to find the correct cToken type
-    const suiReserve = suilendClient.lendingMarket.reserves.find((r) =>
-      r.coinType.name.includes("sui::SUI")
-    );
-    if (!suiReserve) throw new Error("SUI reserve not found in Suilend");
-
-    // Use depositLiquidityAndGetCTokens with the coin object
-    const cTokens = await suilendClient.depositLiquidityAndGetCTokens(
-      userAddress,
+    // Deposit the merged SUI coin into Suilend obligation
+    // Using suilendClient.deposit() which handles:
+    // 1. Depositing liquidity and minting cTokens
+    // 2. Depositing cTokens into the obligation
+    suilendClient.deposit(
+      userSui,
       SUI_COIN_TYPE,
-      userSui, // Pass the coin object from PTB
+      obligationOwnerCapId,
       suiTxBlock
     );
 
-    // Deposit cTokens into obligation
-    await suilendClient.depositCTokenIntoObligation(
-      SUI_COIN_TYPE,
-      cTokens,
-      suiTxBlock,
-      obligationOwnerCapId
+    // Borrow USDC to repay flashloan (addRefreshCalls=false since we already refreshed)
+    console.log(
+      `- Borrowing ${formatUnits(flashloanAmount, 6)} USDC to repay flash loan`
     );
-
-    // Refresh State (REQUIRED)
-    const obligation = await SuilendClient.getObligation(
-      obligationId,
-      [LENDING_MARKET_TYPE],
-      suiClient
-    );
-    await suilendClient.refreshAll(tx.txBlock, obligation);
-
-    // Borrow USDC to repay flashloan
     const borrowedUsdc = await suilendClient.borrow(
       obligationOwnerCapId,
-      obligationId,
+      obligationId || "0x0", // Dummy ID for new obligations
       USDC_COIN_TYPE,
       flashloanAmount.toString(),
-      tx.txBlock
+      suiTxBlock,
+      false // addRefreshCalls=false since we already called refreshAll before deposit
     );
 
     // D. Repay Flashloan
     console.log("Step 4: Repay Scallop Flashloan...");
-    await tx.repayFlashLoan(borrowedUsdc, receipt, "usdc");
+    // borrowedUsdc is a TransactionResult array [coin], extract the first element
+    scallopTxBlock.repayFlashLoan(borrowedUsdc[0] as any, receipt, "usdc");
 
-    // 5. Dry Run using Scallop's inspectTxn
+    // 5. Dry Run
     console.log("\nExecuting dry-run...");
-    const res = await builder.suiKit.inspectTxn(tx);
+    const dryRunResult = await scallopBuilder.dryRunTxBlock(scallopTxBlock);
 
-    if (res.effects.status.status === "failure") {
-      console.error("❌ Dry-run failed:", res.effects.status.error);
+    if (!dryRunResult.success) {
+      console.error("❌ Dry-run failed:", dryRunResult.error);
     } else {
       console.log("✅ Dry-run successful!");
       console.log("\nNote: Real execution script is ready. Use with caution.");
+
+      // Uncomment to execute for real:
+      // const result = await scallopBuilder.signAndSendTxBlock(scallopTxBlock);
+      // console.log("✅ Transaction executed! Digest:", result.digest);
     }
   } catch (error: any) {
     console.error("\nERROR:", error.message || error);
