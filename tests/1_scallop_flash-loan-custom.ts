@@ -80,7 +80,12 @@ async function testFlashLoanWithCustomClient() {
   console.log(`\n📊 Flash Loan Info:`);
   console.log(`─`.repeat(40));
   console.log(`  Asset:       ${symbol}`);
-  console.log(`  Amount:      ${formatUnits(loanAmount, decimals)} ${symbol}`);
+  console.log(
+    `  Amount:      ${formatUnits(
+      loanAmount,
+      decimals
+    )} ${symbol} (Raw: ${loanAmount.toString()})`
+  );
   console.log(`  Price:       $${assetPrice.toFixed(4)}`);
   console.log(`  USD Value:   ~$${usdValue.toFixed(2)}`);
   console.log(`─`.repeat(40));
