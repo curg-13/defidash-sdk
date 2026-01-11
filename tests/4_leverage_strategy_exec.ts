@@ -9,14 +9,21 @@ import {
   LENDING_MARKET_ID,
   LENDING_MARKET_TYPE,
 } from "@suilend/sdk";
-import { MetaAg } from "@7kprotocol/sdk-ts";
+import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
 import { ScallopFlashLoanClient } from "../src/lib/scallop";
+import { getReserveByCoinType, COIN_TYPES } from "../src/lib/const";
 
 const SUI_FULLNODE_URL =
   process.env.SUI_FULLNODE_URL || getFullnodeUrl("mainnet");
-const SUI_COIN_TYPE = "0x2::sui::SUI";
-const USDC_COIN_TYPE =
-  "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC";
+const USDC_COIN_TYPE = COIN_TYPES.USDC;
+
+function normalizeCoinType(coinType: string) {
+  const parts = coinType.split("::");
+  if (parts.length !== 3) return coinType;
+  let pkg = parts[0].replace("0x", "");
+  pkg = pkg.padStart(64, "0");
+  return `0x${pkg}::${parts[1]}::${parts[2]}`;
+}
 
 function formatUnits(
   amount: string | number | bigint,
@@ -35,26 +42,23 @@ function formatUnits(
 }
 
 async function main() {
-  console.log(
-    "--- Leverage Strategy: long SUI with USDC Flashloan (EXECUTE) ---"
-  );
-  console.log("⚠️  WARNING: This script will EXECUTE real transactions!\n");
+  console.log("─".repeat(55));
+  console.log("  📈 Leverage Strategy (Execute)");
+  console.log("  ⚠️  WARNING: This will execute a REAL transaction!");
+  console.log("─".repeat(55));
 
   // 1. Setup
   const secretKey = process.env.SECRET_KEY;
   if (!secretKey || secretKey === "YOUR_SECRET_KEY_HERE") {
-    console.error("Error: SECRET_KEY not found in .env file.");
+    console.error("❌ Error: SECRET_KEY not found in .env file.");
     return;
   }
   const keypair = Ed25519Keypair.fromSecretKey(secretKey as any);
   const userAddress = keypair.getPublicKey().toSuiAddress();
-  console.log(`Using Wallet Address: ${userAddress}`);
+  console.log(`\n👤 Wallet: ${userAddress}`);
 
   const suiClient = new SuiClient({ url: SUI_FULLNODE_URL });
-
-  // Custom Scallop Flash Loan Client (no SDK dependency for flash loans)
   const flashLoanClient = new ScallopFlashLoanClient();
-
   const suilendClient = await SuilendClient.initialize(
     LENDING_MARKET_ID,
     LENDING_MARKET_TYPE,
@@ -65,140 +69,217 @@ async function main() {
       "0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf",
   });
 
-  // 2. Parameters
-  const initialEquitySui = BigInt(process.env.DEPOSIT_AMOUNT || "500000000"); // 0.5 SUI
-  const multiplier = parseFloat(process.env.MULTIPLIER || "1.5");
-  const leverageSuiAmount = BigInt(
-    Math.floor(Number(initialEquitySui) * (multiplier - 1))
-  );
+  // 2. Get config from .env.public
+  const DEPOSIT_COIN_TYPE =
+    process.env.LEVERAGE_DEPOSIT_COIN_TYPE || COIN_TYPES.LBTC;
+  const DEPOSIT_AMOUNT = process.env.LEVERAGE_DEPOSIT_AMOUNT || "1101";
+  const MULTIPLIER = parseFloat(process.env.LEVERAGE_MULTIPLIER || "1.5");
 
-  console.log(`Parameters:`);
-  console.log(`- Initial Equity: ${formatUnits(initialEquitySui, 9)} SUI`);
-  console.log(`- Multiplier: ${multiplier}x`);
+  const normalizedDepositCoin = normalizeCoinType(DEPOSIT_COIN_TYPE);
+  const reserve = getReserveByCoinType(normalizedDepositCoin);
+  const decimals = reserve?.decimals || 8;
+  const symbol = reserve?.symbol || "LBTC";
+
+  // 3. Calculate values using getTokenPrice
+  const depositPrice = await getTokenPrice(normalizedDepositCoin);
+
+  const depositAmountHuman = Number(DEPOSIT_AMOUNT) / Math.pow(10, decimals);
+  const initialEquityUsd = depositAmountHuman * depositPrice;
+
+  // Flash loan amount = Initial Equity * (Multiplier - 1)
+  const flashLoanUsd = initialEquityUsd * (MULTIPLIER - 1);
+  const flashLoanUsdc = Math.ceil(flashLoanUsd * 1e6 * 1.02); // 6 decimals + 2% buffer
+
+  // Total position after leverage
+  const totalPositionUsd = initialEquityUsd * MULTIPLIER;
+  const debtUsd = flashLoanUsd;
+  const netWorthUsd = totalPositionUsd - debtUsd;
+  const actualLtv = debtUsd / totalPositionUsd;
+
+  // LTV and liquidation calculation
+  const LTV = 0.6; // LBTC LTV
+  const maxMultiplier = 1 / (1 - LTV);
+  const liquidationPrice = debtUsd / (depositAmountHuman * MULTIPLIER) / LTV;
+
+  console.log(`\n📊 Leverage Position Preview:`);
+  console.log(`─`.repeat(55));
+  console.log(`  Asset:              ${symbol}`);
   console.log(
-    `- Target Leverage Amount: ${formatUnits(leverageSuiAmount, 9)} SUI`
+    `  Initial Deposit:    ${formatUnits(
+      DEPOSIT_AMOUNT,
+      decimals
+    )} ${symbol} (Raw: ${DEPOSIT_AMOUNT})`
   );
+  console.log(`  ${symbol} Price:         $${depositPrice.toLocaleString()}`);
+  console.log(`  Initial Equity:     ~$${initialEquityUsd.toFixed(2)}`);
+  console.log(`─`.repeat(55));
+  console.log(
+    `  Multiplier:         ${MULTIPLIER}x (Max: ${maxMultiplier.toFixed(2)}x)`
+  );
+  console.log(
+    `  Flash Loan:         ${formatUnits(
+      flashLoanUsdc,
+      6
+    )} USDC (~$${flashLoanUsd.toFixed(2)})`
+  );
+  console.log(`─`.repeat(55));
+  console.log(
+    `  Total Collateral:   ~$${totalPositionUsd.toFixed(2)} ${symbol}`
+  );
+  console.log(`  Total Debt:         ~$${debtUsd.toFixed(2)} USDC`);
+  console.log(`  Net Worth:          ~$${netWorthUsd.toFixed(2)}`);
+  console.log(`  Position LTV:       ${(actualLtv * 100).toFixed(1)}%`);
+  console.log(
+    `  Liquidation Price:  $${liquidationPrice.toLocaleString(undefined, {
+      maximumFractionDigits: 0,
+    })}`
+  );
+  console.log(
+    `  Price Drop Buffer:  ${(
+      (1 - liquidationPrice / depositPrice) *
+      100
+    ).toFixed(1)}%`
+  );
+  console.log(`─`.repeat(55));
+
+  if (MULTIPLIER > maxMultiplier) {
+    console.error(
+      `\n❌ Multiplier ${MULTIPLIER}x exceeds max ${maxMultiplier.toFixed(2)}x!`
+    );
+    return;
+  }
 
   try {
-    // 3. Estimate Flashloan Amount (SUI -> USDC)
-    console.log("\nEstimating required USDC flashloan...");
-    const quotesForLoan = await metaAg.quote({
-      amountIn: leverageSuiAmount.toString(),
-      coinTypeIn: SUI_COIN_TYPE,
-      coinTypeOut: USDC_COIN_TYPE,
+    // 4. Get swap quote: USDC -> Deposit Asset
+    console.log(`\n🔍 Fetching swap quote: USDC → ${symbol}...`);
+    const swapQuotes = await metaAg.quote({
+      amountIn: flashLoanUsdc.toString(),
+      coinTypeIn: USDC_COIN_TYPE,
+      coinTypeOut: normalizedDepositCoin,
     });
 
-    if (quotesForLoan.length === 0)
-      throw new Error("No quotes found for SUI -> USDC");
-    const quoteForLoan = quotesForLoan.sort(
+    if (swapQuotes.length === 0) {
+      console.log(`\n⚠️  No swap quotes found for USDC → ${symbol}`);
+      return;
+    }
+
+    const bestQuote = swapQuotes.sort(
       (a, b) => Number(b.amountOut) - Number(a.amountOut)
     )[0];
 
-    // Adding a 2% buffer for slippage and fees
-    const flashloanAmount = BigInt(
-      Math.floor(Number(quoteForLoan.amountOut) * 1.02)
-    );
+    const expectedOutput = Number(bestQuote.amountOut);
     console.log(
-      `Estimated USDC needed: ${formatUnits(flashloanAmount, 6)} USDC`
+      `  Expected:     ${formatUnits(expectedOutput, decimals)} ${symbol}`
     );
 
-    // 4. Start Transaction using standard @mysten/sui Transaction
+    // 5. Build Transaction
+    console.log(`\n🔧 Building transaction...`);
     const tx = new Transaction();
     tx.setSender(userAddress);
 
-    // A. Flash loan USDC from Scallop (using custom client)
-    console.log(
-      `\nStep 1: Scallop Flashloan ${formatUnits(flashloanAmount, 6)} USDC...`
-    );
+    // A. Flash loan USDC
+    console.log(`  Step 1: Flash loan ${formatUnits(flashLoanUsdc, 6)} USDC`);
     const [loanCoin, receipt] = flashLoanClient.borrowFlashLoan(
       tx,
-      flashloanAmount,
+      BigInt(flashLoanUsdc),
       "usdc"
     );
 
-    // B. Swap USDC to SUI via 7k-SDK
-    console.log("Step 2: 7k-SDK Swap USDC -> SUI...");
-    const swapQuotes = await metaAg.quote({
-      amountIn: flashloanAmount.toString(),
-      coinTypeIn: USDC_COIN_TYPE,
-      coinTypeOut: SUI_COIN_TYPE,
-    });
-
-    const bestSwapQuote = swapQuotes.sort(
-      (a, b) =>
-        Number(b.simulatedAmountOut || b.amountOut) -
-        Number(a.simulatedAmountOut || a.amountOut)
-    )[0];
-
-    const swappedSui = await metaAg.swap(
+    // B. Swap USDC to deposit asset
+    console.log(`  Step 2: Swap USDC → ${symbol}`);
+    const swappedAsset = await metaAg.swap(
       {
-        quote: bestSwapQuote,
+        quote: bestQuote,
         signer: userAddress,
         coinIn: loanCoin,
         tx: tx,
       },
       100
-    ); // 1% slippage
+    );
 
-    // C. Suilend Operations
-    console.log("Step 3: Suilend Deposit & Borrow...");
-
-    // Find existing Obligation or create one in the PTB
+    // C. Get or create obligation
     const obligationOwnerCaps = await SuilendClient.getObligationOwnerCaps(
       userAddress,
       [LENDING_MARKET_TYPE],
       suiClient
     );
-    const existingObligationOwnerCap = obligationOwnerCaps[0];
-
+    const existingCap = obligationOwnerCaps[0];
     let obligationOwnerCapId: string;
     let obligationId: string;
 
-    if (existingObligationOwnerCap) {
-      obligationOwnerCapId = existingObligationOwnerCap.id;
-      obligationId = existingObligationOwnerCap.obligationId;
-      console.log(`- Using existing Obligation ID: ${obligationId}`);
+    if (existingCap) {
+      obligationOwnerCapId = existingCap.id;
+      obligationId = existingCap.obligationId;
+      console.log(`  Step 3: Using existing obligation`);
     } else {
-      console.log("- No existing obligation found, creating new one in PTB...");
-      const newObligationOwnerCap = suilendClient.createObligation(tx);
-      obligationOwnerCapId = newObligationOwnerCap as any;
+      console.log(`  Step 3: Creating new obligation`);
+      const newCap = suilendClient.createObligation(tx);
+      obligationOwnerCapId = newCap as any;
       obligationId = "";
     }
 
-    // Get user's existing equity SUI from gas coin
-    const userSui = tx.splitCoins(tx.gas, [tx.pure.u64(initialEquitySui)]);
+    // D. Get user's existing deposit coins and merge
+    console.log(`  Step 4: Merge user's ${symbol} with swapped ${symbol}`);
+    const userCoins = await suiClient.getCoins({
+      owner: userAddress,
+      coinType: normalizedDepositCoin,
+    });
 
-    // Merge with swapped SUI
-    tx.mergeCoins(userSui, [swappedSui]);
+    if (userCoins.data.length === 0) {
+      console.log(`\n⚠️  No ${symbol} coins found in wallet!`);
+      return;
+    }
 
-    // Calculate total deposit amount
-    const totalDepositAmount = initialEquitySui + leverageSuiAmount;
-    console.log(
-      `- Total SUI to deposit: ~${formatUnits(totalDepositAmount, 9)} SUI`
+    const primaryCoin = tx.object(userCoins.data[0].coinObjectId);
+    if (userCoins.data.length > 1) {
+      const otherCoins = userCoins.data
+        .slice(1)
+        .map((c) => tx.object(c.coinObjectId));
+      tx.mergeCoins(primaryCoin, otherCoins);
+    }
+    tx.mergeCoins(primaryCoin, [swappedAsset]);
+
+    // E. Refresh oracles BEFORE deposit (include both deposit and borrow coin types)
+    if (existingCap) {
+      console.log(`  Step 5: Refresh oracles`);
+      const obligation = await SuilendClient.getObligation(
+        obligationId,
+        [LENDING_MARKET_TYPE],
+        suiClient
+      );
+      // Include both deposit coin and USDC in refresh
+      await suilendClient.refreshAll(tx, obligation, [
+        normalizedDepositCoin,
+        USDC_COIN_TYPE,
+      ]);
+    }
+
+    // F. Deposit merged coins (user's + swapped)
+    console.log(`  Step 6: Deposit all ${symbol} as collateral`);
+    suilendClient.deposit(
+      primaryCoin,
+      normalizedDepositCoin,
+      obligationOwnerCapId,
+      tx
     );
 
-    // Deposit the merged SUI coin into Suilend obligation
-    suilendClient.deposit(userSui, SUI_COIN_TYPE, obligationOwnerCapId, tx);
-
-    // Borrow USDC to repay flashloan
-    console.log(
-      `- Borrowing ${formatUnits(flashloanAmount, 6)} USDC to repay flash loan`
-    );
+    // G. Borrow USDC to repay flash loan (no refresh - already done above)
+    console.log(`  Step 7: Borrow ${formatUnits(flashLoanUsdc, 6)} USDC`);
     const borrowedUsdc = await suilendClient.borrow(
       obligationOwnerCapId,
       obligationId || "0x0",
       USDC_COIN_TYPE,
-      flashloanAmount.toString(),
+      flashLoanUsdc.toString(),
       tx,
-      !existingObligationOwnerCap ? false : true
+      false // Already did refreshAll above
     );
 
-    // D. Repay Flashloan (using custom client)
-    console.log("Step 4: Repay Scallop Flashloan...");
+    // H. Repay flash loan
+    console.log(`  Step 8: Repay flash loan`);
     flashLoanClient.repayFlashLoan(tx, borrowedUsdc[0] as any, receipt, "usdc");
 
-    // 5. Execute Transaction
-    console.log("\n🚀 Executing transaction...");
+    // 6. Execute Transaction
+    console.log(`\n🚀 Executing transaction...`);
     const result = await suiClient.signAndExecuteTransaction({
       transaction: tx,
       signer: keypair,
@@ -206,20 +287,21 @@ async function main() {
     });
 
     if (result.effects?.status.status === "success") {
-      console.log("✅ Leverage position created successfully!");
-      console.log(`📋 Transaction Digest: ${result.digest}`);
-      console.log(`\n📊 Summary:`);
-      console.log(`   - Deposited: ~${formatUnits(totalDepositAmount, 9)} SUI`);
-      console.log(`   - Borrowed: ${formatUnits(flashloanAmount, 6)} USDC`);
-      console.log(`   - Leverage: ${multiplier}x`);
+      console.log(`\n✅ Leverage position created successfully!`);
+      console.log(`📋 Digest: ${result.digest}`);
+      console.log(`\n📊 Final Position:`);
+      console.log(`   Collateral: ~$${totalPositionUsd.toFixed(2)} ${symbol}`);
+      console.log(`   Debt:       ~$${debtUsd.toFixed(2)} USDC`);
+      console.log(`   Leverage:   ${MULTIPLIER}x`);
     } else {
-      console.error("❌ Transaction failed:", result.effects?.status.error);
+      console.error(`❌ Transaction failed:`, result.effects?.status.error);
     }
+
+    console.log(`\n` + "─".repeat(55));
+    console.log(`  ✨ Done!`);
+    console.log("─".repeat(55));
   } catch (error: any) {
-    console.error("\nERROR:", error.message || error);
-    if (error.stack) {
-      console.error("Stack Trace:", error.stack);
-    }
+    console.error(`\n❌ ERROR: ${error.message || error}`);
   }
 }
 
