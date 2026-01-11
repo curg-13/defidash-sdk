@@ -79,6 +79,37 @@ LEVERAGE_MULTIPLIER=1.5
 | **3\_** | `3_7k_swap_dryrun.ts`            | `npm run test:swap`            | 7k Aggregator 스왑 (시뮬레이션)     |
 | **3\_** | `3_7k_swap_exec.ts`              | `npm run test:swap-exec`       | 7k Aggregator 스왑 (실행)           |
 
+#### 각 테스트가 참조하는 `.env.public` 변수
+
+**1번 - Flash Loan (Scallop)**
+
+```bash
+FLASH_LOAN_COIN_TYPE    # Flash Loan 자산 타입 (기본: USDC)
+FLASH_LOAN_AMOUNT       # Flash Loan 수량 (raw units)
+```
+
+**2번 - Lending (Suilend)**
+
+```bash
+# Deposit
+DEPOSIT_COIN_TYPE       # 예치할 자산 타입
+DEPOSIT_AMOUNT          # 예치 수량 (raw units)
+DEPOSIT_THRESHOLD       # 기존 예치 잔액 임계값 (이상이면 스킵)
+
+# Borrow
+BORROW_COIN_TYPE        # 대출할 자산 타입
+BORROW_AMOUNT           # 대출 수량 (raw units)
+BORROW_THRESHOLD        # 기존 대출 잔액 임계값
+```
+
+**3번 - Swap (7k Aggregator)**
+
+```bash
+SWAP_INPUT_COIN_TYPE    # 스왑 입력 자산 (예: USDC)
+SWAP_OUTPUT_COIN_TYPE   # 스왑 출력 자산 (예: LBTC)
+SWAP_AMOUNT             # 스왑 수량 (raw units)
+```
+
 ### Final Leverage Strategy (4번)
 
 4번 스크립트는 1~3번 컴포넌트를 **단일 Programmable Transaction Block (PTB)**으로 통합한 최종 레버리지 전략입니다.
