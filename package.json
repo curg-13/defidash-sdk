@@ -5,15 +5,15 @@
   "main": "index.js",
   "scripts": {
     "start": "ts-node src/index.ts",
-    "test:dryrun": "ts-node tests/1_scallop_flash-loan-dryrun.ts",
     "test:fees": "ts-node tests/1_scallop_query-fees.ts",
     "test:suilend-borrow": "ts-node tests/2_suilend_borrow.ts",
     "test:suilend-deposit": "ts-node tests/2_suilend_deposit.ts",
-    "test:flash-loan": "ts-node tests/1_scallop_flash-loan-test.ts",
+    "test:flash-loan": "ts-node tests/1_scallop_flash-loan-custom.ts",
     "test:swap": "ts-node tests/3_7k_swap.ts",
     "test:swap-execute": "ts-node tests/3_7k_swap_execute.ts",
     "test:leverage": "ts-node tests/4_leverage_strategy_dryrun.ts",
-    "test:leverage-exec": "ts-node tests/4_leverage_strategy_exec.ts"
+    "test:leverage-exec": "ts-node tests/4_leverage_strategy_exec.ts",
+    "test:lbtc-leverage": "ts-node tests/5_lbtc_leverage_strategy.ts"
   },
   "keywords": [],
   "author": "",

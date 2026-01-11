@@ -1,4 +1,6 @@
-import "dotenv/config";
+import * as dotenv from "dotenv";
+dotenv.config(); // Load SECRET_KEY from .env
+dotenv.config({ path: ".env.public" }); // Load other configs from .env.public
 import {
   SuilendClient,
   LENDING_MARKET_ID,
@@ -7,6 +9,8 @@ import {
 import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { getTokenPrice } from "@7kprotocol/sdk-ts";
+import { getReserveByCoinType } from "../src/lib/const";
 
 // Mainnet Coin Types
 const SUI_COIN_TYPE = "0x2::sui::SUI";
@@ -22,6 +26,22 @@ function normalizeCoinType(coinType: string) {
   let pkg = parts[0].replace("0x", "");
   pkg = pkg.padStart(64, "0");
   return `0x${pkg}::${parts[1]}::${parts[2]}`;
+}
+
+function formatUnits(
+  amount: string | number | bigint,
+  decimals: number
+): string {
+  const s = amount.toString();
+  if (decimals === 0) return s;
+  const pad = s.padStart(decimals + 1, "0");
+  const transition = pad.length - decimals;
+  return (
+    `${pad.slice(0, transition)}.${pad.slice(transition)}`.replace(
+      /\.?0+$/,
+      ""
+    ) || "0"
+  );
 }
 
 async function main() {
@@ -55,6 +75,7 @@ async function main() {
     if (b.coinType === SUI_COIN_TYPE) coinName = "SUI";
     else if (b.coinType.includes(DEPOSIT_COIN_TYPE)) coinName = "Deposit Token";
     else if (b.coinType.includes("::usdc::USDC")) coinName = "USDC (Native)";
+    else if (b.coinType.includes("::lbtc::LBTC")) coinName = "LBTC";
     else {
       const parts = b.coinType.split("::");
       if (parts.length > 0) coinName = parts[parts.length - 1];
@@ -147,7 +168,30 @@ async function main() {
         `\nExisting deposit found: ${depositValue} cTokens. Skipping deposit (Threshold: ${DEPOSIT_THRESHOLD}).`
       );
     } else {
-      console.log(`\nDepositing ${DEPOSIT_AMOUNT} units...`);
+      // Get decimals and price for human-readable display
+      const reserve = getReserveByCoinType(
+        normalizeCoinType(DEPOSIT_COIN_TYPE)
+      );
+      const decimals = reserve?.decimals || 6;
+      const symbol = reserve?.symbol || "tokens";
+      const humanAmount = Number(DEPOSIT_AMOUNT) / Math.pow(10, decimals);
+
+      // Get asset price from 7k
+      const assetPrice = await getTokenPrice(
+        normalizeCoinType(DEPOSIT_COIN_TYPE)
+      );
+      const usdValue = humanAmount * assetPrice;
+
+      console.log(`\n📊 Deposit Info:`);
+      console.log(`─`.repeat(40));
+      console.log(`  Asset:       ${symbol}`);
+      console.log(
+        `  Amount:      ${formatUnits(DEPOSIT_AMOUNT, decimals)} ${symbol}`
+      );
+      console.log(`  Price:       $${assetPrice.toLocaleString()}`);
+      console.log(`  USD Value:   ~$${usdValue.toFixed(2)}`);
+      console.log(`─`.repeat(40));
+      console.log(`\nDepositing...`);
       const depositTx = new Transaction();
       await suilendClient.depositIntoObligation(
         userAddress,
@@ -182,14 +226,6 @@ async function main() {
 
     console.log(`\nRefreshing obligation state ...`);
     await suilendClient.refreshAll(borrowTx, obligation);
-
-    const reserves = suilendClient.lendingMarket.reserves;
-    console.log("\nMarket Reserves:");
-    for (const reserve of reserves) {
-      console.log(`- Coin: ${reserve.coinType.name}`);
-      console.log(`  ID: ${reserve.id}`);
-      console.log(`  Mint Decimals: ${reserve.mintDecimals}`);
-    }
 
     console.log("\nDone!");
   } catch (e: any) {

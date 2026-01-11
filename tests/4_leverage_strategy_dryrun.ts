@@ -1,4 +1,6 @@
-import "dotenv/config";
+import * as dotenv from "dotenv";
+dotenv.config(); // Load SECRET_KEY from .env
+dotenv.config({ path: ".env.public" }); // Load other configs from .env.public
 import { getFullnodeUrl, SuiClient } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
@@ -96,6 +98,40 @@ async function main() {
     console.log(
       `Estimated USDC needed: ${formatUnits(flashloanAmount, 6)} USDC`
     );
+
+    // Calculate and display leverage position info
+    const suiPriceQuote = await metaAg.quote({
+      amountIn: "1000000000", // 1 SUI
+      coinTypeIn: SUI_COIN_TYPE,
+      coinTypeOut: USDC_COIN_TYPE,
+    });
+    const suiPriceUsdc =
+      suiPriceQuote.length > 0 ? Number(suiPriceQuote[0].amountOut) / 1e6 : 0;
+
+    const totalDepositSui = initialEquitySui + leverageSuiAmount;
+    const collateralValueUsd = (Number(totalDepositSui) / 1e9) * suiPriceUsdc;
+    const debtValueUsd = Number(flashloanAmount) / 1e6;
+    const netWorthUsd = collateralValueUsd - debtValueUsd;
+    const actualLeverage = collateralValueUsd / netWorthUsd;
+
+    console.log("\n📈 Leverage Position Preview:");
+    console.log("─".repeat(45));
+    console.log(`  SUI Price:         $${suiPriceUsdc.toFixed(4)}`);
+    console.log(
+      `  Collateral:        ${formatUnits(
+        totalDepositSui,
+        9
+      )} SUI (~$${collateralValueUsd.toFixed(2)})`
+    );
+    console.log(
+      `  Debt:              ${formatUnits(
+        flashloanAmount,
+        6
+      )} USDC (~$${debtValueUsd.toFixed(2)})`
+    );
+    console.log(`  Net Worth:         ~$${netWorthUsd.toFixed(2)}`);
+    console.log(`  Leverage:          ${actualLeverage.toFixed(2)}x`);
+    console.log("─".repeat(45));
 
     // 4. Start Transaction using standard @mysten/sui Transaction
     const tx = new Transaction();
