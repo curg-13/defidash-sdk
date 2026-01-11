@@ -9,8 +9,8 @@
     "test:suilend-borrow": "ts-node tests/2_suilend_borrow.ts",
     "test:suilend-deposit": "ts-node tests/2_suilend_deposit.ts",
     "test:flash-loan": "ts-node tests/1_scallop_flash-loan-custom.ts",
-    "test:swap": "ts-node tests/3_7k_swap.ts",
-    "test:swap-execute": "ts-node tests/3_7k_swap_execute.ts",
+    "test:swap": "ts-node tests/3_7k_swap_dryrun.ts",
+    "test:swap-exec": "ts-node tests/3_7k_swap_exec.ts",
     "test:leverage": "ts-node tests/4_leverage_strategy_dryrun.ts",
     "test:leverage-exec": "ts-node tests/4_leverage_strategy_exec.ts",
     "test:lbtc-leverage": "ts-node tests/5_lbtc_leverage_strategy.ts"

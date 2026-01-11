@@ -12,7 +12,7 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { getTokenPrice } from "@7kprotocol/sdk-ts";
 import { getReserveByCoinType } from "../src/lib/const";
 
-// Mainnet Coin Types
+// Config from .env.public
 const SUI_COIN_TYPE = "0x2::sui::SUI";
 const DEPOSIT_COIN_TYPE =
   process.env.DEPOSIT_COIN_TYPE ||
@@ -45,47 +45,51 @@ function formatUnits(
 }
 
 async function main() {
-  console.log("--- Suilend Deposit & Lending Script ---");
+  console.log("─".repeat(50));
+  console.log("  📦 Suilend Deposit Script");
+  console.log("─".repeat(50));
 
-  // 1. Setup User Address
+  // 1. Setup
   const secretKey = process.env.SECRET_KEY;
   if (!secretKey || secretKey === "YOUR_SECRET_KEY_HERE") {
-    console.error("Error: SECRET_KEY not found in .env file.");
+    console.error("❌ Error: SECRET_KEY not found in .env file.");
     return;
   }
 
   const keypair = Ed25519Keypair.fromSecretKey(secretKey as any);
   const userAddress = keypair.getPublicKey().toSuiAddress();
-  console.log(`Using Wallet Address: ${userAddress}`);
+  console.log(`\n👤 Wallet: ${userAddress}`);
 
-  // 2. Initialize Clients
   const suiClient = new SuiClient({ url: SUI_FULLNODE_URL });
-  console.log("Initializing Suilend Client...");
   const suilendClient = await SuilendClient.initialize(
     LENDING_MARKET_ID,
     LENDING_MARKET_TYPE,
     suiClient
   );
-  console.log("Suilend Client initialized.");
 
+  // 2. Show relevant balances
   const balances = await suiClient.getAllBalances({ owner: userAddress });
-  console.log("\nUser Balances:");
+  const normalizedDepositCoin = normalizeCoinType(DEPOSIT_COIN_TYPE);
+  const reserve = getReserveByCoinType(normalizedDepositCoin);
+  const decimals = reserve?.decimals || 6;
+  const symbol = reserve?.symbol || "Token";
+
+  console.log(`\n💰 Balances:`);
   balances.forEach((b) => {
-    let coinName = b.coinType;
-    if (b.coinType === SUI_COIN_TYPE) coinName = "SUI";
-    else if (b.coinType.includes(DEPOSIT_COIN_TYPE)) coinName = "Deposit Token";
-    else if (b.coinType.includes("::usdc::USDC")) coinName = "USDC (Native)";
-    else if (b.coinType.includes("::lbtc::LBTC")) coinName = "LBTC";
-    else {
-      const parts = b.coinType.split("::");
-      if (parts.length > 0) coinName = parts[parts.length - 1];
+    const normalizedB = normalizeCoinType(b.coinType);
+    if (normalizedB === normalizedDepositCoin) {
+      console.log(
+        `  • ${symbol}: ${formatUnits(b.totalBalance, decimals)} (Raw: ${
+          b.totalBalance
+        })`
+      );
+    } else if (b.coinType === SUI_COIN_TYPE) {
+      console.log(`  • SUI: ${formatUnits(b.totalBalance, 9)}`);
     }
-    console.log(`- ${coinName}: ${b.totalBalance}`);
   });
 
   try {
-    // 3. Check/Create Obligation
-    console.log("\nChecking for existing obligations...");
+    // 3. Check Obligation
     const obligationOwnerCaps = await SuilendClient.getObligationOwnerCaps(
       userAddress,
       [LENDING_MARKET_TYPE],
@@ -96,11 +100,9 @@ async function main() {
     let obligationId = obligationOwnerCap?.obligationId;
 
     if (!obligationOwnerCap) {
-      console.log("No existing obligation found. Creating new obligation...");
+      console.log(`\n📝 Creating new obligation...`);
       const createTx = new Transaction();
       const newObligationCap = suilendClient.createObligation(createTx);
-
-      // Explicitly transfer the cap to the user to avoid UnusedValueWithoutDrop
       createTx.transferObjects([newObligationCap], userAddress);
 
       const result = await suiClient.signAndExecuteTransaction({
@@ -108,13 +110,8 @@ async function main() {
         transaction: createTx,
         options: { showEffects: true },
       });
-      console.log("Obligation created. Digest:", result.digest);
+      console.log(`  ✅ Created! Digest: ${result.digest}`);
 
-      // Wait a bit for indexing? (In a real script, might need retry or wait)
-      // For this script, we assume it's available or we might need to fetch it again properly if the return type is just the cap object not the on-chain ID immediately usable without fetching?
-      // actually createObligation returns the object argument for the transaction context.
-      // After execution, we need to query the caps again to get the ID.
-      console.log("Waiting for obligation creation to be indexed...");
       await new Promise((resolve) => setTimeout(resolve, 3000));
       const newCaps = await SuilendClient.getObligationOwnerCaps(
         userAddress,
@@ -124,15 +121,14 @@ async function main() {
       obligationOwnerCap = newCaps[0];
       obligationId = obligationOwnerCap.obligationId;
     } else {
-      console.log(`Found existing Obligation ID: ${obligationId}`);
+      console.log(`\n📋 Obligation: ${obligationId?.slice(0, 20)}...`);
     }
 
     if (!obligationId) {
       throw new Error("Failed to retrieve Obligation ID.");
     }
 
-    // 4. Check existing deposit balance
-    console.log("\nChecking existing deposits...");
+    // 4. Check existing deposits
     const obligationDetails = await SuilendClient.getObligation(
       obligationId,
       [LENDING_MARKET_TYPE],
@@ -140,58 +136,45 @@ async function main() {
     );
 
     const existingDeposit = obligationDetails.deposits.find((d: any) => {
-      return (
-        normalizeCoinType(d.coinType.name) ===
-        normalizeCoinType(DEPOSIT_COIN_TYPE)
-      );
+      return normalizeCoinType(d.coinType.name) === normalizedDepositCoin;
     });
 
-    if (existingDeposit) {
-      console.log(
-        `- Existing Deposit: ${existingDeposit.depositedCtokenAmount} cTokens`
-      );
-    } else {
-      console.log("- Existing Deposit: None");
-    }
-
-    // Note: Adjust amount as needed.
-    // Default threshold from env or fallback to 100,000
     const DEPOSIT_THRESHOLD = Number(process.env.DEPOSIT_THRESHOLD) || 100000;
     const DEPOSIT_AMOUNT = process.env.DEPOSIT_AMOUNT || "100000";
+    const depositValue = existingDeposit?.depositedCtokenAmount || 0;
 
-    const depositValue = existingDeposit
-      ? existingDeposit.depositedCtokenAmount
-      : 0;
+    // Get asset price
+    const assetPrice = await getTokenPrice(normalizedDepositCoin);
+    const humanAmount = Number(DEPOSIT_AMOUNT) / Math.pow(10, decimals);
+    const usdValue = humanAmount * assetPrice;
 
+    // Show deposit info
+    console.log(`\n📊 Deposit Info:`);
+    console.log(`─`.repeat(45));
+    console.log(`  Asset:       ${symbol}`);
+    console.log(
+      `  Amount:      ${formatUnits(
+        DEPOSIT_AMOUNT,
+        decimals
+      )} ${symbol} (Raw: ${DEPOSIT_AMOUNT})`
+    );
+    console.log(`  Price:       $${assetPrice.toLocaleString()}`);
+    console.log(`  USD Value:   ~$${usdValue.toFixed(2)}`);
+    if (existingDeposit) {
+      console.log(`  Existing:    ${depositValue} cTokens`);
+    }
+    console.log(`─`.repeat(45));
+
+    // 5. Deposit if needed
     if (Number(depositValue) > DEPOSIT_THRESHOLD) {
       console.log(
-        `\nExisting deposit found: ${depositValue} cTokens. Skipping deposit (Threshold: ${DEPOSIT_THRESHOLD}).`
+        `\n⏭️  Skipping deposit (existing > threshold: ${DEPOSIT_THRESHOLD})`
       );
     } else {
-      // Get decimals and price for human-readable display
-      const reserve = getReserveByCoinType(
-        normalizeCoinType(DEPOSIT_COIN_TYPE)
-      );
-      const decimals = reserve?.decimals || 6;
-      const symbol = reserve?.symbol || "tokens";
-      const humanAmount = Number(DEPOSIT_AMOUNT) / Math.pow(10, decimals);
-
-      // Get asset price from 7k
-      const assetPrice = await getTokenPrice(
-        normalizeCoinType(DEPOSIT_COIN_TYPE)
-      );
-      const usdValue = humanAmount * assetPrice;
-
-      console.log(`\n📊 Deposit Info:`);
-      console.log(`─`.repeat(40));
-      console.log(`  Asset:       ${symbol}`);
       console.log(
-        `  Amount:      ${formatUnits(DEPOSIT_AMOUNT, decimals)} ${symbol}`
+        `\n🔄 Depositing ${formatUnits(DEPOSIT_AMOUNT, decimals)} ${symbol}...`
       );
-      console.log(`  Price:       $${assetPrice.toLocaleString()}`);
-      console.log(`  USD Value:   ~$${usdValue.toFixed(2)}`);
-      console.log(`─`.repeat(40));
-      console.log(`\nDepositing...`);
+
       const depositTx = new Transaction();
       await suilendClient.depositIntoObligation(
         userAddress,
@@ -206,30 +189,16 @@ async function main() {
         transaction: depositTx,
         options: { showEffects: true },
       });
-      console.log("Deposit successful. Digest:", depositResult.digest);
+
+      console.log(`\n✅ Deposit successful!`);
+      console.log(`📋 Digest: ${depositResult.digest}`);
     }
 
-    // 5. Borrow USDC
-    // Refresh obligation first
-    console.log("\nRefreshing obligation state...");
-    let obligation = await SuilendClient.getObligation(
-      obligationId,
-      [LENDING_MARKET_TYPE],
-      suiClient
-    );
-
-    // Borrow 0.01 USDC (USDC is 6 decimals, so 10000)
-    // BE CAREFUL: Ensure you have enough collateral. 0.1 SUI (~$0.x) should cover 0.01 USDC easily.
-    const borrowAmount = "10000"; // 0.01 USDC
-    console.log(`\nBorrowing ${borrowAmount} units (0.01 USDC)...`);
-    const borrowTx = new Transaction();
-
-    console.log(`\nRefreshing obligation state ...`);
-    await suilendClient.refreshAll(borrowTx, obligation);
-
-    console.log("\nDone!");
+    console.log(`\n` + "─".repeat(50));
+    console.log(`  ✨ Done!`);
+    console.log("─".repeat(50));
   } catch (e: any) {
-    console.error("\nERROR:", e.message || e);
+    console.error(`\n❌ ERROR: ${e.message || e}`);
   }
 }
 
