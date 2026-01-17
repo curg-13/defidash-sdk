@@ -1,6 +1,6 @@
 {
   "name": "defi-dash-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Multi-protocol DeFi SDK for Sui blockchain - leverage, flash loans, and lending strategies",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -13,6 +13,8 @@
     "start": "ts-node src/index.ts",
     "build": "tsc",
     "prepublishOnly": "npm run build",
+    "publish:npm": "npm run build && npm publish",
+    "publish:dry": "npm run build && npm publish --dry-run",
     "example:leverage": "ts-node examples/leverage.ts",
     "example:deleverage": "ts-node examples/deleverage.ts",
     "script:scallop-fees": "ts-node scripts/scallop/scallop_query-fees.ts",
