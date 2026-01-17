@@ -1,16 +1,61 @@
-# DeFi Dash SDK
+# DefiDash SDK
 
-> Multi-protocol DeFi SDK for Sui blockchain - leverage strategies, flash loans, and lending protocols
+Multi-protocol DeFi SDK for Sui blockchain — **leverage lending strategies** with minimal friction.
 
-[![npm version](https://img.shields.io/npm/v/defi-dash-sdk.svg)](https://www.npmjs.com/package/defi-dash-sdk)
-[![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
+## Why Leverage Lending?
 
-## Features
+**Leverage lending is a powerful DeFi primitive for long-term asset appreciation.**
 
-- 🔧 **Utility Functions** - Token formatting, coin type normalization
-- 🏦 **Protocol Wrappers** - Scallop, Suilend integration
-- 🔄 **Leverage Strategies** - One-click leverage long positions
-- ⚡ **Type-Safe** - Full TypeScript support
+If you believe certain assets like **BTC** will trend upward over time despite short-term volatility, leverage lending allows you to:
+
+- **Multiply your profit exposure** — instead of holding 1x BTC, hold 2x or 3x
+- **Maintain a stable position** — unlike perpetual futures, no funding rates eating into your position
+- **Lower costs** — no recurring fees, only the spread between borrow/supply APY
+- **Composable on-chain** — fully transparent, no CEX counterparty risk
+
+### Leverage Lending vs Perpetual Futures
+
+| Aspect                | Leverage Lending        | Perpetual Futures        |
+| --------------------- | ----------------------- | ------------------------ |
+| **Funding Rate**      | None                    | -0.01% ~ +0.03% every 8h |
+| **Ongoing Costs**     | Borrow APY - Supply APY | Funding + Trading Fees   |
+| **Liquidation**       | Collateral-based LTV    | Margin-based             |
+| **Counterparty**      | On-chain protocol       | Exchange (CEX/DEX)       |
+| **Position Duration** | Unlimited               | Funding rate dependent   |
+
+> **TL;DR**: If you're bullish on an asset long-term, leverage lending is more capital-efficient than perpetual futures.
+
+---
+
+## What is DefiDash SDK?
+
+DefiDash SDK is a **DeFi Saver-like toolkit** for Sui blockchain. It abstracts complex multi-protocol interactions into simple function calls.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                     Leverage Strategy (Single PTB)                    │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐   │
+│  │  1. Flash Loan  │───▶│  2. Swap        │───▶│  3. Lending     │   │
+│  │   (Scallop)     │    │   (7k Protocol) │    │   (Suilend/Navi)│   │
+│  └─────────────────┘    └─────────────────┘    └─────────────────┘   │
+│         │                                              │              │
+│         └────────────── Borrow to Repay ◀──────────────┘              │
+│                                                                       │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**How it works:**
+
+1. **Flash Loan** — Borrow USDC from Scallop (no collateral needed)
+2. **Swap** — Convert USDC to collateral asset (LBTC, SUI, etc.) via 7k Aggregator
+3. **Deposit** — Deposit collateral into lending protocol (Suilend or Navi)
+4. **Borrow** — Borrow USDC against collateral to repay flash loan
+
+All steps execute atomically in a single Sui Programmable Transaction Block (PTB).
 
 ---
 
@@ -18,193 +63,182 @@
 
 ```bash
 npm install defi-dash-sdk
-# or
-yarn add defi-dash-sdk
 ```
-
----
 
 ## Quick Start
 
-### 1. Basic Usage - Utility Functions
-
 ```typescript
-import { formatUnits, parseUnits, normalizeCoinType } from 'defi-dash-sdk';
+import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { DefiDashSDK, LendingProtocol } from "defi-dash-sdk";
 
-// Format token amounts
-const humanReadable = formatUnits(1000000, 6); // "1" (USDC)
-const rawAmount = parseUnits("1.5", 6); // 1500000n
+// Initialize
+const suiClient = new SuiClient({ url: getFullnodeUrl("mainnet") });
+const keypair = Ed25519Keypair.fromSecretKey(YOUR_SECRET_KEY);
 
-// Normalize coin types
-const normalized = normalizeCoinType("0x2::sui::SUI");
-// "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI"
-```
+const sdk = new DefiDashSDK();
+await sdk.initialize(suiClient, keypair);
 
-### 2. Using Type Definitions
+// Execute 2x leverage on LBTC
+const result = await sdk.leverage({
+  protocol: LendingProtocol.Suilend,
+  depositAsset: "LBTC",
+  depositAmount: "0.001",  // Human-readable
+  multiplier: 2.0,
+  dryRun: false,           // Set true to simulate
+});
 
-```typescript
-import type { MarketReserve } from 'defi-dash-sdk';
+console.log(result.txDigest); // Transaction hash
 
-const reserve: MarketReserve = {
-  coinType: "0x2::sui::SUI",
-  id: "0x...",
-  decimals: 9,
-  symbol: "SUI"
-};
+// Close position
+await sdk.deleverage({
+  protocol: LendingProtocol.Suilend,
+  dryRun: false,
+});
 ```
 
 ---
 
-## API Reference
+## Supported Protocols
 
-### Utilities
-
-#### `formatUnits(amount, decimals): string`
-
-Converts raw token amount to human-readable format.
-
-**Parameters:**
-
-- `amount` - Raw amount (string | number | bigint)
-- `decimals` - Token decimals (e.g., 6 for USDC, 9 for SUI)
-
-**Returns:** Formatted string with proper decimal placement
-
-**Example:**
-
-```typescript
-formatUnits(1500000, 6) // "1.5"
-formatUnits(1000000000, 9) // "1"
-```
-
-#### `parseUnits(amount, decimals): bigint`
-
-Converts human-readable amount to raw units.
-
-**Parameters:**
-
-- `amount` - Human-readable amount string
-- `decimals` - Token decimals
-
-**Returns:** Raw amount as bigint
-
-**Example:**
-
-```typescript
-parseUnits("1.5", 6) // 1500000n
-```
-
-#### `normalizeCoinType(coinType): string`
-
-Normalizes Sui coin type addresses (pads to 64 chars, ensures 0x prefix).
-
-#### `formatCoinType(type): string`
-
-Uses `normalizeStructTag` from `@mysten/sui` with fallback.
-
----
-
-## Development
-
-This package is designed for both Node.js scripts and frontend applications.
-
-### For Testing Strategies
-
-Clone the repo to access example scripts:
-
-```bash
-git clone https://github.com/yourusername/defi-dash-sdk.git
-cd defi-dash-sdk
-npm install
-
-# Run example leverage strategy
-npm run test:suilend-leverage
-```
-
-### Building from Source
-
-```bash
-npm run build  # Compiles TypeScript to dist/
-```
-
----
-
-## Architecture
-
-```
-defi-dash-sdk/
-├── src/
-│   ├── index.ts           # SDK entry point
-│   └── lib/
-│       ├── utils/         # Formatting & normalization
-│       ├── scallop/       # Flash loan wrapper
-│       └── suilend/       # Lending constants
-└── tests/                 # Integration examples
-```
+| Component           | Protocols     |
+| ------------------- | ------------- |
+| **Flash Loan**      | Scallop       |
+| **Swap Aggregator** | 7k Protocol   |
+| **Lending**         | Suilend, Navi |
 
 ---
 
 ## Examples
 
-### Using in a Frontend (React/Next.js)
+See `examples/` folder for full working examples:
+
+```bash
+# Setup environment
+cp .env.example .env.test
+# Edit .env.test with your secret key
+
+# Run leverage example (dry run by default)
+npm run example:leverage
+
+# Run deleverage example
+npm run example:deleverage
+```
+
+### Environment Variables
+
+| Variable                     | Description                    | Default   |
+| ---------------------------- | ------------------------------ | --------- |
+| `SECRET_KEY`                 | Sui wallet secret key (base64) | Required  |
+| `LEVERAGE_PROTOCOL`          | `suilend` or `navi`            | `suilend` |
+| `LEVERAGE_DEPOSIT_COIN_TYPE` | Asset symbol or coin type      | `LBTC`    |
+| `LEVERAGE_DEPOSIT_AMOUNT`    | Amount in raw units            | `1000`    |
+| `LEVERAGE_MULTIPLIER`        | Leverage multiplier            | `2`       |
+| `TX_MODE`                    | `dryrun` or `exec`             | `dryrun`  |
+
+---
+
+## API Reference
+
+### `DefiDashSDK`
 
 ```typescript
-import { formatUnits, normalizeCoinType } from 'defi-dash-sdk';
+class DefiDashSDK {
+  // Initialize with Sui client and keypair
+  initialize(suiClient: SuiClient, keypair: Ed25519Keypair): Promise<void>;
 
-function TokenBalance({ amount, decimals, symbol }) {
-  const formatted = formatUnits(amount, decimals);
+  // Open leveraged position
+  leverage(params: LeverageParams): Promise<StrategyResult>;
 
-  return <div>{formatted} {symbol}</div>;
+  // Close leveraged position
+  deleverage(params: DeleverageParams): Promise<StrategyResult>;
+
+  // Get current position
+  getPosition(protocol: LendingProtocol): Promise<PositionInfo | null>;
+
+  // Preview leverage before execution
+  previewLeverage(params): Promise<LeveragePreview>;
 }
 ```
 
-### Using in a Node.js Script
+### Types
 
 ```typescript
-import { parseUnits } from 'defi-dash-sdk';
+enum LendingProtocol {
+  Suilend = "suilend",
+  Navi = "navi",
+}
 
-const depositAmount = parseUnits("100", 6); // 100 USDC
-console.log(`Depositing: ${depositAmount} raw units`);
+interface LeverageParams {
+  protocol: LendingProtocol;
+  depositAsset: string;      // "LBTC" or full coin type
+  depositAmount: string;     // Human-readable, e.g., "0.001"
+  multiplier: number;        // 1.5, 2.0, 3.0, etc.
+  dryRun?: boolean;
+}
+
+interface StrategyResult {
+  success: boolean;
+  txDigest?: string;
+  gasUsed?: bigint;
+  error?: string;
+}
 ```
 
 ---
 
-## Protocol Support
+## Development Scripts
 
-| Protocol    | Type              | Status         |
-| ----------- | ----------------- | -------------- |
-| Scallop     | Flash Loans       | ✅ Supported   |
-| Suilend     | Lending/Borrowing | ✅ Supported   |
-| 7k Protocol | Swap Aggregator   | ✅ Supported   |
-| NAVI        | Lending           | 🚧 In Progress |
+For debugging and testing individual protocol integrations:
+
+```bash
+# Setup
+cp .env.scripts.example .env.scripts
+
+# Suilend scripts
+npm run script:suilend-leverage
+npm run script:suilend-deleverage
+
+# Navi scripts
+npm run script:navi-leverage
+npm run script:navi-deleverage
+
+# Scallop flash loan
+npm run script:scallop-flashloan
+
+# 7k swap
+npm run script:swap
+```
 
 ---
 
-## Dependencies
+## Project Structure
 
-Core dependencies (automatically installed):
-
-- `@mysten/sui` - Sui blockchain SDK
-- `@suilend/sdk` - Suilend protocol
-- `@scallop-io/sui-scallop-sdk` - Scallop flash loans
-- `@7kprotocol/sdk-ts` - 7k swap aggregator
-
----
-
-## Contributing
-
-Contributions are welcome! Please open an issue or PR.
+```
+defi-dash-sdk/
+├── src/
+│   ├── index.ts          # SDK entry point
+│   ├── sdk.ts            # DefiDashSDK class
+│   ├── types.ts          # TypeScript types
+│   ├── protocols/        # Protocol adapters
+│   │   ├── suilend.ts
+│   │   └── navi.ts
+│   ├── strategies/       # Strategy builders
+│   │   ├── leverage.ts
+│   │   └── deleverage.ts
+│   └── lib/              # Utilities
+├── examples/             # SDK usage examples
+│   ├── leverage.ts
+│   └── deleverage.ts
+└── scripts/              # Development scripts
+    ├── suilend/
+    ├── navi/
+    ├── scallop/
+    └── 7k/
+```
 
 ---
 
 ## License
 
-ISC
-
----
-
-## Links
-
-- [Documentation](#) (Coming Soon)
-- [GitHub Repository](#)
-- [Example Apps](#)
+MIT
