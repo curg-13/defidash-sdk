@@ -1,6 +1,6 @@
 import * as dotenv from "dotenv";
-dotenv.config(); // Load SECRET_KEY from .env
-dotenv.config({ path: ".env.public" }); // Load other configs from .env.public
+dotenv.config({ path: ".env.scripts" }); // Load SECRET_KEY from .env
+ // Load other configs from .env.public
 
 import { Scallop } from "@scallop-io/sui-scallop-sdk";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";

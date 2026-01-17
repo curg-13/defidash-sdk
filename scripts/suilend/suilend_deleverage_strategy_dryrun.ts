@@ -1,6 +1,6 @@
 import * as dotenv from "dotenv";
-dotenv.config();
-dotenv.config({ path: ".env.public" });
+dotenv.config({ path: ".env.scripts" });
+
 import { getFullnodeUrl, SuiClient } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";

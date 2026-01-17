@@ -1,6 +1,6 @@
 import * as dotenv from "dotenv";
-dotenv.config(); // Load SECRET_KEY from .env
-dotenv.config({ path: ".env.public" }); // Load other configs from .env.public
+dotenv.config({ path: ".env.scripts" }); // Load SECRET_KEY from .env
+ // Load other configs from .env.public
 import { getFullnodeUrl, SuiClient } from "@mysten/sui/client";
 
 // Flash loan fees are stored in a separate on-chain table

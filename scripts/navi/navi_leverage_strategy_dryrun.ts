@@ -1,6 +1,6 @@
 import * as dotenv from "dotenv";
-dotenv.config(); // Load SECRET_KEY from .env
-dotenv.config({ path: ".env.public" }); // Load other configs from .env.public
+dotenv.config({ path: ".env.scripts" }); // Load SECRET_KEY from .env
+ // Load other configs from .env.public
 import { getFullnodeUrl, SuiClient } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
@@ -301,7 +301,7 @@ async function main() {
     }
 
     // D. Update oracle prices (required before deposit/borrow)
-    const feedsToUpdate = [depositFeed, usdcFeed].filter(Boolean);
+    const feedsToUpdate = [depositFeed, usdcFeed].filter((f): f is NonNullable<typeof f> => Boolean(f));
     if (feedsToUpdate.length > 0) {
       console.log(`  Step 4: Update oracle prices`);
       await updateOraclePricesPTB(tx as any, feedsToUpdate, {
