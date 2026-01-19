@@ -25,7 +25,11 @@
  */
 
 // Main SDK
-export { DefiDashSDK } from "./sdk";
+export {
+  DefiDashSDK,
+  BrowserLeverageParams,
+  BrowserDeleverageParams,
+} from "./sdk";
 
 // Types and Enums
 export {
