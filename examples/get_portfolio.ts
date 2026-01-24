@@ -50,7 +50,6 @@ async function main() {
 
   console.log("--- Aggregated Portfolio ---");
   for (const p of portfolios) {
-    if (p.protocol === "navi") continue; // Skip Navi for now as requested
     console.log(`\nProtocol: ${p.protocol}`);
     console.log(`Health Factor: ${p.healthFactor}`);
     console.log(`Net Value: $${p.netValueUsd.toFixed(2)}`);
