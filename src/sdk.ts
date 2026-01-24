@@ -27,6 +27,7 @@ import {
 import { ILendingProtocol } from "./protocols/interface";
 import { SuilendAdapter } from "./protocols/suilend";
 import { NaviAdapter } from "./protocols/navi";
+import { ScallopAdapter } from "./protocols/scallop";
 import { ScallopFlashLoanClient } from "./lib/scallop";
 import {
   buildLeverageTransaction as buildLeverageTx,
@@ -141,6 +142,10 @@ export class DefiDashSDK {
     const navi = new NaviAdapter();
     await navi.initialize(suiClient);
     this.protocols.set(LendingProtocol.Navi, navi);
+
+    const scallop = new ScallopAdapter();
+    await scallop.initialize(suiClient);
+    this.protocols.set(LendingProtocol.Scallop, scallop);
 
     this.initialized = true;
   }
@@ -311,7 +316,7 @@ export class DefiDashSDK {
 
     const tx = new Transaction();
     tx.setSender(this.userAddress);
-    tx.setGasBudget(100_000_000);
+    tx.setGasBudget(50_000_000);
 
     try {
       await this.buildLeverageTransaction(tx, params);
@@ -348,7 +353,7 @@ export class DefiDashSDK {
 
     const tx = new Transaction();
     tx.setSender(this.userAddress);
-    tx.setGasBudget(100_000_000);
+    tx.setGasBudget(50_000_000);
 
     try {
       await this.buildDeleverageTransaction(tx, params);
@@ -424,7 +429,7 @@ export class DefiDashSDK {
   async getAggregatedMarkets(): Promise<Record<string, MarketAsset[]>> {
     this.ensureInitialized();
     const result: Record<string, MarketAsset[]> = {};
-    const protocols = [LendingProtocol.Suilend, LendingProtocol.Navi];
+    const protocols = [LendingProtocol.Suilend, LendingProtocol.Navi, LendingProtocol.Scallop];
 
     await Promise.all(
       protocols.map(async (p) => {
@@ -448,7 +453,7 @@ export class DefiDashSDK {
    */
   async getAggregatedPortfolio(): Promise<AccountPortfolio[]> {
     this.ensureInitialized();
-    const protocols = [LendingProtocol.Suilend, LendingProtocol.Navi];
+    const protocols = [LendingProtocol.Suilend, LendingProtocol.Navi, LendingProtocol.Scallop];
     const address = this.userAddress;
 
     const portfolios = await Promise.all(
