@@ -287,10 +287,12 @@ export class NaviAdapter implements ILendingProtocol {
       const price = parseFloat(pool.oracle?.price ?? pool.price ?? "0");
 
       // Helper to parse APY (handle bps vs ratio)
+      // Return APY as decimal (e.g., 0.03 for 3%) to match Suilend format
+      // Navi returns APY in percentage (e.g., 3.161 for 3.161%)
+      // Convert to decimal to match Suilend format
       const getApy = (raw: any) => {
         const val = parseFloat(raw ?? "0");
-        const ratio = val > 1 ? val / 10000 : val;
-        return ratio * 100;
+        return val / 100;
       };
 
       const supplyApy = getApy(
@@ -342,6 +344,8 @@ export class NaviAdapter implements ILendingProtocol {
     const positions: Position[] = [];
     let totalCollateralUsd = 0;
     let totalDebtUsd = 0;
+    let borrowLimitUsd = 0;
+    let liquidationThresholdUsd = 0;
 
     for (const state of lendingState as any[]) {
       const coinType = normalizeCoinType(
@@ -356,10 +360,12 @@ export class NaviAdapter implements ILendingProtocol {
       const supplyRaw = BigInt(state.supplyBalance ?? 0);
       const borrowRaw = BigInt(state.borrowBalance ?? 0);
 
+      // Return APY as decimal (e.g., 0.03 for 3%) to match Suilend format
+      // Navi returns APY in percentage (e.g., 3.161 for 3.161%)
+      // Convert to decimal to match Suilend format
       const getApy = (raw: any) => {
         const val = parseFloat(raw ?? "0");
-        const ratio = val > 1 ? val / 10000 : val;
-        return ratio * 100;
+        return val / 100;
       };
 
       if (supplyRaw > 0) {
@@ -367,6 +373,15 @@ export class NaviAdapter implements ILendingProtocol {
         const amount = Number(supplyRaw) / Math.pow(10, NAVI_BALANCE_DECIMALS);
         const valueUsd = amount * price;
         totalCollateralUsd += valueUsd;
+
+        // Get LTV and liquidation threshold from pool
+        const liqThreshold = parseFloat(
+          state.pool?.liquidationFactor?.threshold ?? "0.8",
+        );
+        const ltv = liqThreshold - 0.05; // Safety margin, same as getMarkets
+
+        borrowLimitUsd += valueUsd * ltv;
+        liquidationThresholdUsd += valueUsd * liqThreshold;
 
         const supplyApy = getApy(
           state.pool?.supplyApy ?? state.pool?.supplyIncentiveApyInfo?.apy,
@@ -404,14 +419,40 @@ export class NaviAdapter implements ILendingProtocol {
       }
     }
 
+    // Calculate net APY and annual earnings
+    const netValueUsd = totalCollateralUsd - totalDebtUsd;
+    let weightedSupplyApy = 0;
+    let weightedBorrowApy = 0;
+
+    for (const pos of positions) {
+      if (pos.side === "supply" && totalCollateralUsd > 0) {
+        weightedSupplyApy += (pos.valueUsd / totalCollateralUsd) * pos.apy;
+      } else if (pos.side === "borrow" && totalDebtUsd > 0) {
+        weightedBorrowApy += (pos.valueUsd / totalDebtUsd) * pos.apy;
+      }
+    }
+
+    // Net APY on equity = (supply earnings - borrow costs) / net value
+    const supplyEarnings = totalCollateralUsd * weightedSupplyApy;
+    const borrowCosts = totalDebtUsd * weightedBorrowApy;
+    const netApy =
+      netValueUsd > 0 ? (supplyEarnings - borrowCosts) / netValueUsd : 0;
+    const totalAnnualNetEarningsUsd = supplyEarnings - borrowCosts;
+
     return {
       protocol: LendingProtocol.Navi,
       address,
       healthFactor: parseFloat(healthFactor.toString()),
-      netValueUsd: totalCollateralUsd - totalDebtUsd,
+      netValueUsd,
       totalCollateralUsd,
+      totalDepositedUsd: totalCollateralUsd,
       totalDebtUsd,
+      weightedBorrowsUsd: totalDebtUsd, // Navi uses 1:1 weight for borrows
+      borrowLimitUsd,
+      liquidationThresholdUsd,
       positions,
+      netApy,
+      totalAnnualNetEarningsUsd,
     };
   }
 
