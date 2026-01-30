@@ -1,9 +1,7 @@
 {
   "name": "defi-dash-sdk",
-  "version": "0.1.1",
+  "version": "0.1.3-alpha.4",
   "description": "Multi-protocol DeFi SDK for Sui blockchain - leverage, flash loans, and lending strategies",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
   "files": [
     "dist",
     "README.md",
@@ -12,9 +10,15 @@
   "scripts": {
     "start": "ts-node src/index.ts",
     "build": "tsc",
+    "test": "ts-node tests/runner.ts",
+    "example:portfolio": "npx ts-node examples/get_portfolio.ts",
+    "example:markets": "npx ts-node examples/get_markets.ts",
+    "example:limits": "npx ts-node examples/get_limits.ts",
+    "lint": "eslint src --ext .ts",
     "prepublishOnly": "npm run build",
     "publish:npm": "npm run build && npm publish",
     "publish:dry": "npm run build && npm publish --dry-run",
+    "publish:alpha": "npm run build && npm publish --tag alpha",
     "example:leverage": "ts-node examples/leverage.ts",
     "example:deleverage": "ts-node examples/deleverage.ts",
     "script:scallop-fees": "ts-node scripts/scallop/scallop_query-fees.ts",
@@ -44,13 +48,24 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
-  "dependencies": {
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "peerDependencies": {
     "@7kprotocol/sdk-ts": "^4.0.0",
     "@mysten/sui": "^1.42.0",
     "@naviprotocol/lending": "^1.0.0",
+    "@suilend/sdk": "^1.1.99"
+  },
+  "dependencies": {
     "@scallop-io/sui-scallop-sdk": "^2.3.13",
-    "@suilend/sdk": "^1.1.99",
     "@suilend/sui-fe": "^0.3.50",
+    "bignumber.js": "^9.3.1"
+  },
+  "devDependencies": {
+    "@7kprotocol/sdk-ts": "^4.0.0",
+    "@mysten/sui": "^1.45.2",
+    "@naviprotocol/lending": "^1.0.0",
+    "@suilend/sdk": "^1.1.99",
     "@types/node": "^25.0.3",
     "dotenv": "^17.2.3",
     "ts-node": "^10.9.2",

@@ -15,10 +15,19 @@ import {
   getLendingState,
   updateOraclePricesPTB,
   getPriceFeeds,
+  getHealthFactor,
   normalizeCoinType as naviNormalize,
 } from "@naviprotocol/lending";
 import { ILendingProtocol, ReserveInfo } from "./interface";
-import { PositionInfo, AssetPosition, USDC_COIN_TYPE } from "../types";
+import {
+  PositionInfo,
+  AssetPosition,
+  USDC_COIN_TYPE,
+  MarketAsset,
+  AccountPortfolio,
+  LendingProtocol,
+  Position,
+} from "../types";
 import { normalizeCoinType } from "../lib/utils";
 import { getReserveByCoinType } from "../lib/suilend/const";
 import { getTokenPrice } from "@7kprotocol/sdk-ts";
@@ -249,10 +258,12 @@ export class NaviAdapter implements ILendingProtocol {
   async getReserveInfo(coinType: string): Promise<ReserveInfo | undefined> {
     this.ensureInitialized();
 
-    const pool = this.getPool(coinType);
+    const pool = this.getPool(coinType) as any;
     if (!pool) return undefined;
 
-    const reserve = getReserveByCoinType(normalizeCoinType(coinType));
+    const reserve = getReserveByCoinType(
+      normalizeCoinType(pool.coinType ?? pool.suiCoinType ?? ""),
+    );
 
     return {
       coinType: pool.coinType,
@@ -262,10 +273,214 @@ export class NaviAdapter implements ILendingProtocol {
   }
 
   /**
+   * Get all market data
+   */
+  async getMarkets(): Promise<MarketAsset[]> {
+    this.ensureInitialized();
+
+    return this.pools.map((pool: any) => {
+      const coinType = normalizeCoinType(
+        pool.coinType ?? pool.suiCoinType ?? "",
+      );
+      const reserve = getReserveByCoinType(coinType);
+      const decimals = reserve?.decimals || 9;
+      const price = parseFloat(pool.oracle?.price ?? pool.price ?? "0");
+
+      // Helper to parse APY (handle bps vs ratio)
+      // Return APY as decimal (e.g., 0.03 for 3%) to match Suilend format
+      // Navi returns APY in percentage (e.g., 3.161 for 3.161%)
+      // Convert to decimal to match Suilend format
+      const getApy = (raw: any) => {
+        const val = parseFloat(raw ?? "0");
+        return val / 100;
+      };
+
+      const supplyApy = getApy(
+        pool.supplyApy ?? pool.supplyIncentiveApyInfo?.apy,
+      );
+      const borrowApy = getApy(
+        pool.borrowApy ?? pool.borrowIncentiveApyInfo?.apy,
+      );
+
+      return {
+        symbol: reserve?.symbol || coinType.split("::").pop() || "UNKNOWN",
+        coinType,
+        decimals,
+        price,
+        supplyApy,
+        borrowApy,
+        maxLtv: parseFloat(pool.liquidationFactor?.threshold ?? "0.8") - 0.05, // Safety margin
+        liquidationThreshold: parseFloat(
+          pool.liquidationFactor?.threshold ?? "0.8",
+        ),
+        totalSupply:
+          parseFloat(pool.totalSupply ?? pool.totalSupplyAmount ?? "0") /
+          Math.pow(10, decimals),
+        totalBorrow:
+          parseFloat(pool.totalBorrow ?? pool.borrowedAmount ?? "0") /
+          Math.pow(10, decimals),
+        availableLiquidity:
+          parseFloat(
+            pool.leftSupply ??
+              pool.availableBorrow ??
+              pool.leftBorrowAmount ??
+              "0",
+          ) / Math.pow(10, decimals),
+      };
+    });
+  }
+
+  /**
+   * Get aggregated portfolio
+   */
+  async getAccountPortfolio(address: string): Promise<AccountPortfolio> {
+    this.ensureInitialized();
+
+    const [lendingState, healthFactor] = await Promise.all([
+      getLendingState(address, { env: "prod" }),
+      getHealthFactor(address, { env: "prod" }),
+    ]);
+
+    const positions: Position[] = [];
+    let totalCollateralUsd = 0;
+    let totalDebtUsd = 0;
+    let borrowLimitUsd = 0;
+    let liquidationThresholdUsd = 0;
+
+    for (const state of lendingState as any[]) {
+      const coinType = normalizeCoinType(
+        state.coinType ?? state.pool?.coinType ?? "",
+      );
+      const reserve = getReserveByCoinType(coinType);
+      const symbol = reserve?.symbol || "UNKNOWN";
+      const price = parseFloat(
+        state.pool?.oracle?.price ?? state.pool?.price ?? "0",
+      );
+
+      const supplyRaw = BigInt(state.supplyBalance ?? 0);
+      const borrowRaw = BigInt(state.borrowBalance ?? 0);
+
+      // Return APY as decimal (e.g., 0.03 for 3%) to match Suilend format
+      // Navi returns APY in percentage (e.g., 3.161 for 3.161%)
+      // Convert to decimal to match Suilend format
+      const getApy = (raw: any) => {
+        const val = parseFloat(raw ?? "0");
+        return val / 100;
+      };
+
+      if (supplyRaw > 0) {
+        // Navi internal balances are 9 decimals
+        const amount = Number(supplyRaw) / Math.pow(10, NAVI_BALANCE_DECIMALS);
+        const valueUsd = amount * price;
+        totalCollateralUsd += valueUsd;
+
+        // Get LTV and liquidation threshold from pool
+        const liqThreshold = parseFloat(
+          state.pool?.liquidationFactor?.threshold ?? "0.8",
+        );
+        const ltv = liqThreshold - 0.05; // Safety margin, same as getMarkets
+
+        borrowLimitUsd += valueUsd * ltv;
+        liquidationThresholdUsd += valueUsd * liqThreshold;
+
+        const supplyApy = getApy(
+          state.pool?.supplyApy ?? state.pool?.supplyIncentiveApyInfo?.apy,
+        );
+
+        positions.push({
+          protocol: LendingProtocol.Navi,
+          symbol,
+          coinType,
+          side: "supply",
+          amount,
+          valueUsd,
+          apy: supplyApy,
+        });
+      }
+
+      if (borrowRaw > 0) {
+        const amount = Number(borrowRaw) / Math.pow(10, NAVI_BALANCE_DECIMALS);
+        const valueUsd = amount * price;
+        totalDebtUsd += valueUsd;
+
+        const borrowApy = getApy(
+          state.pool?.borrowApy ?? state.pool?.borrowIncentiveApyInfo?.apy,
+        );
+
+        positions.push({
+          protocol: LendingProtocol.Navi,
+          symbol,
+          coinType,
+          side: "borrow",
+          amount,
+          valueUsd,
+          apy: borrowApy,
+        });
+      }
+    }
+
+    // Calculate net APY and annual earnings
+    const netValueUsd = totalCollateralUsd - totalDebtUsd;
+    let weightedSupplyApy = 0;
+    let weightedBorrowApy = 0;
+
+    for (const pos of positions) {
+      if (pos.side === "supply" && totalCollateralUsd > 0) {
+        weightedSupplyApy += (pos.valueUsd / totalCollateralUsd) * pos.apy;
+      } else if (pos.side === "borrow" && totalDebtUsd > 0) {
+        weightedBorrowApy += (pos.valueUsd / totalDebtUsd) * pos.apy;
+      }
+    }
+
+    // Net APY on equity = (supply earnings - borrow costs) / net value
+    const supplyEarnings = totalCollateralUsd * weightedSupplyApy;
+    const borrowCosts = totalDebtUsd * weightedBorrowApy;
+    const netApy =
+      netValueUsd > 0 ? (supplyEarnings - borrowCosts) / netValueUsd : 0;
+    const totalAnnualNetEarningsUsd = supplyEarnings - borrowCosts;
+
+    return {
+      protocol: LendingProtocol.Navi,
+      address,
+      healthFactor: parseFloat(healthFactor.toString()),
+      netValueUsd,
+      totalCollateralUsd,
+      totalDepositedUsd: totalCollateralUsd,
+      totalDebtUsd,
+      weightedBorrowsUsd: totalDebtUsd, // Navi uses 1:1 weight for borrows
+      borrowLimitUsd,
+      liquidationThresholdUsd,
+      positions,
+      netApy,
+      totalAnnualNetEarningsUsd,
+    };
+  }
+
+  /**
    * Get all available pools
    */
   getPools() {
     this.ensureInitialized();
     return this.pools;
+  }
+
+  async getMaxBorrowableAmount(
+    address: string,
+    coinType: string,
+  ): Promise<string> {
+    // TODO: Implement for Navi
+    throw new Error(
+      "Methods getMaxBorrowableAmount not implemented for Navi yet",
+    );
+  }
+
+  async getMaxWithdrawableAmount(
+    address: string,
+    coinType: string,
+  ): Promise<string> {
+    // TODO: Implement for Navi
+    throw new Error(
+      "Methods getMaxWithdrawableAmount not implemented for Navi yet",
+    );
   }
 }

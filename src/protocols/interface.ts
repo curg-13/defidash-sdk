@@ -6,7 +6,7 @@
 
 import { Transaction } from "@mysten/sui/transactions";
 import { SuiClient } from "@mysten/sui/client";
-import { PositionInfo } from "../types";
+import { PositionInfo, MarketAsset, AccountPortfolio } from "../types";
 
 /**
  * Common interface for all lending protocol adapters
@@ -120,6 +120,31 @@ export interface ILendingProtocol {
    * @returns Reserve info or undefined
    */
   getReserveInfo(coinType: string): Promise<ReserveInfo | undefined>;
+
+  /**
+   * Fetch all market data for the protocol
+   */
+  getMarkets(): Promise<MarketAsset[]>;
+
+  /**
+   * Fetch aggregated account portfolio
+   * @param address - User address
+   */
+  getAccountPortfolio(address: string): Promise<AccountPortfolio>;
+
+  /**
+   * Calculate max borrowable amount for an asset
+   * @param address - User address
+   * @param coinType - Coin type using full address
+   */
+  getMaxBorrowableAmount(address: string, coinType: string): Promise<string>;
+
+  /**
+   * Calculate max withdrawable amount for an asset
+   * @param address - User address
+   * @param coinType - Coin type using full address
+   */
+  getMaxWithdrawableAmount(address: string, coinType: string): Promise<string>;
 }
 
 /**

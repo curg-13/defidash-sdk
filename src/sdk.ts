@@ -2,6 +2,7 @@
  * DeFi Dash SDK - Main SDK Class
  *
  * Multi-protocol DeFi SDK for Sui blockchain
+ * Supports both Node.js (with keypair) and Browser (with wallet adapter)
  */
 
 import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
@@ -19,6 +20,8 @@ import {
   SDKOptions,
   USDC_COIN_TYPE,
   DEFAULT_7K_PARTNER,
+  MarketAsset,
+  AccountPortfolio,
 } from "./types";
 
 import { ILendingProtocol } from "./protocols/interface";
@@ -26,39 +29,60 @@ import { SuilendAdapter } from "./protocols/suilend";
 import { NaviAdapter } from "./protocols/navi";
 import { ScallopFlashLoanClient } from "./lib/scallop";
 import {
-  buildLeverageTransaction,
+  buildLeverageTransaction as buildLeverageTx,
   calculateLeveragePreview as calcPreview,
 } from "./strategies/leverage";
 import {
-  buildDeleverageTransaction,
+  buildDeleverageTransaction as buildDeleverageTx,
   calculateDeleverageEstimate,
 } from "./strategies/deleverage";
 import { normalizeCoinType, parseUnits } from "./lib/utils";
 import { getReserveByCoinType, COIN_TYPES } from "./lib/suilend/const";
 
 /**
+ * Browser-compatible Leverage Parameters (no dryRun - handled externally)
+ */
+export interface BrowserLeverageParams {
+  protocol: LendingProtocol;
+  depositAsset: string;
+  depositAmount: string;
+  multiplier: number;
+}
+
+/**
+ * Browser-compatible Deleverage Parameters
+ */
+export interface BrowserDeleverageParams {
+  protocol: LendingProtocol;
+}
+
+/**
  * DeFi Dash SDK - Main entry point
  *
- * @example
+ * @example Node.js usage:
  * ```typescript
- * import { DefiDashSDK, LendingProtocol } from 'defi-dash-sdk';
- *
  * const sdk = new DefiDashSDK();
  * await sdk.initialize(suiClient, keypair);
+ * const result = await sdk.leverage({ protocol: LendingProtocol.Suilend, ... });
+ * ```
  *
- * // Execute leverage strategy
- * const result = await sdk.leverage({
- *   protocol: LendingProtocol.Suilend,
- *   depositAsset: 'LBTC',
- *   depositAmount: '0.001',
- *   multiplier: 2.0,
- *   dryRun: true
- * });
+ * @example Browser usage:
+ * ```typescript
+ * const sdk = new DefiDashSDK();
+ * await sdk.initialize(suiClient, userAddress);  // No keypair needed
+ *
+ * const tx = new Transaction();
+ * tx.setSender(userAddress);
+ * await sdk.buildLeverageTransaction(tx, { protocol, depositAsset, ... });
+ *
+ * // Sign with wallet adapter
+ * await signAndExecute({ transaction: tx });
  * ```
  */
 export class DefiDashSDK {
   private suiClient!: SuiClient;
-  private keypair!: Ed25519Keypair;
+  private keypair?: Ed25519Keypair; // Optional for browser
+  private _userAddress?: string; // For browser mode
   private flashLoanClient!: ScallopFlashLoanClient;
   private swapClient!: MetaAg;
   private protocols: Map<LendingProtocol, ILendingProtocol> = new Map();
@@ -70,14 +94,36 @@ export class DefiDashSDK {
   }
 
   /**
-   * Initialize the SDK with Sui client and keypair
+   * Initialize the SDK
+   *
+   * @param suiClient - Sui client instance
+   * @param keypairOrAddress - Ed25519Keypair (Node.js) or user address string (Browser)
+   *
+   * @example Node.js
+   * ```typescript
+   * await sdk.initialize(suiClient, keypair);
+   * ```
+   *
+   * @example Browser
+   * ```typescript
+   * await sdk.initialize(suiClient, account.address);
+   * ```
    */
   async initialize(
     suiClient: SuiClient,
-    keypair: Ed25519Keypair
+    keypairOrAddress: Ed25519Keypair | string,
   ): Promise<void> {
     this.suiClient = suiClient;
-    this.keypair = keypair;
+
+    // Detect if keypair or address
+    if (typeof keypairOrAddress === "string") {
+      // Browser mode: address only
+      this._userAddress = keypairOrAddress;
+    } else {
+      // Node.js mode: keypair
+      this.keypair = keypairOrAddress;
+      this._userAddress = keypairOrAddress.getPublicKey().toSuiAddress();
+    }
 
     // Initialize flash loan client
     this.flashLoanClient = new ScallopFlashLoanClient();
@@ -114,7 +160,10 @@ export class DefiDashSDK {
   }
 
   private get userAddress(): string {
-    return this.keypair.getPublicKey().toSuiAddress();
+    if (!this._userAddress) {
+      throw new Error("User address not set. Call initialize() first.");
+    }
+    return this._userAddress;
   }
 
   /**
@@ -137,45 +186,135 @@ export class DefiDashSDK {
   }
 
   // ============================================================================
-  // Strategy Methods
+  // Browser-Compatible Transaction Builder Methods
   // ============================================================================
 
   /**
-   * Execute leverage strategy
+   * Build leverage transaction (Browser-compatible)
    *
-   * Opens a leveraged position by:
-   * 1. Flash loaning USDC
-   * 2. Swapping to deposit asset
-   * 3. Depositing as collateral
-   * 4. Borrowing USDC to repay flash loan
+   * Builds the transaction but does NOT execute it.
+   * Use with wallet adapter's signAndExecute.
+   *
+   * @param tx - Transaction to add commands to
+   * @param params - Leverage parameters
+   *
+   * @example
+   * ```typescript
+   * const tx = new Transaction();
+   * tx.setSender(account.address);
+   * tx.setGasBudget(200_000_000);
+   *
+   * await sdk.buildLeverageTransaction(tx, {
+   *   protocol: LendingProtocol.Suilend,
+   *   depositAsset: 'LBTC',
+   *   depositAmount: '0.001',
+   *   multiplier: 2.0,
+   * });
+   *
+   * await signAndExecute({ transaction: tx });
+   * ```
    */
-  async leverage(params: LeverageParams): Promise<StrategyResult> {
+  async buildLeverageTransaction(
+    tx: Transaction,
+    params: BrowserLeverageParams,
+  ): Promise<void> {
     this.ensureInitialized();
 
     const protocol = this.getProtocol(params.protocol);
     const coinType = this.resolveCoinType(params.depositAsset);
     const reserve = getReserveByCoinType(coinType);
     const decimals = reserve?.decimals || 8;
-
-    // Parse amount
     const depositAmount = parseUnits(params.depositAmount, decimals);
 
-    // Build transaction
+    await buildLeverageTx(tx, {
+      protocol,
+      flashLoanClient: this.flashLoanClient,
+      swapClient: this.swapClient,
+      suiClient: this.suiClient,
+      userAddress: this.userAddress,
+      depositCoinType: coinType,
+      depositAmount,
+      multiplier: params.multiplier,
+    });
+  }
+
+  /**
+   * Build deleverage transaction (Browser-compatible)
+   *
+   * Builds the transaction but does NOT execute it.
+   * Use with wallet adapter's signAndExecute.
+   *
+   * @param tx - Transaction to add commands to
+   * @param params - Deleverage parameters
+   *
+   * @example
+   * ```typescript
+   * const tx = new Transaction();
+   * tx.setSender(account.address);
+   * tx.setGasBudget(200_000_000);
+   *
+   * await sdk.buildDeleverageTransaction(tx, {
+   *   protocol: LendingProtocol.Suilend,
+   * });
+   *
+   * await signAndExecute({ transaction: tx });
+   * ```
+   */
+  async buildDeleverageTransaction(
+    tx: Transaction,
+    params: BrowserDeleverageParams,
+  ): Promise<void> {
+    this.ensureInitialized();
+
+    const protocol = this.getProtocol(params.protocol);
+
+    // Get current position
+    const position = await protocol.getPosition(this.userAddress);
+    if (!position) {
+      throw new Error("No position found to deleverage");
+    }
+
+    if (position.debt.amount === 0n) {
+      throw new Error("No debt to repay. Use withdraw instead.");
+    }
+
+    await buildDeleverageTx(tx, {
+      protocol,
+      flashLoanClient: this.flashLoanClient,
+      swapClient: this.swapClient,
+      suiClient: this.suiClient,
+      userAddress: this.userAddress,
+      position,
+    });
+  }
+
+  // ============================================================================
+  // Node.js Strategy Methods (with execution)
+  // ============================================================================
+
+  /**
+   * Execute leverage strategy (Node.js only)
+   *
+   * Requires SDK to be initialized with keypair.
+   * For browser usage, use buildLeverageTransaction instead.
+   */
+  async leverage(params: LeverageParams): Promise<StrategyResult> {
+    this.ensureInitialized();
+
+    if (!this.keypair) {
+      return {
+        success: false,
+        error:
+          "Keypair required for execution. Use buildLeverageTransaction for browser.",
+      };
+    }
+
     const tx = new Transaction();
     tx.setSender(this.userAddress);
     tx.setGasBudget(100_000_000);
 
     try {
-      await buildLeverageTransaction(tx, {
-        protocol,
-        flashLoanClient: this.flashLoanClient,
-        swapClient: this.swapClient,
-        suiClient: this.suiClient,
-        userAddress: this.userAddress,
-        depositCoinType: coinType,
-        depositAmount,
-        multiplier: params.multiplier,
-      });
+      await this.buildLeverageTransaction(tx, params);
 
       if (params.dryRun) {
         return this.dryRun(tx);
@@ -191,50 +330,28 @@ export class DefiDashSDK {
   }
 
   /**
-   * Execute deleverage strategy
+   * Execute deleverage strategy (Node.js only)
    *
-   * Closes a leveraged position by:
-   * 1. Flash loaning USDC to repay debt
-   * 2. Withdrawing collateral
-   * 3. Swapping collateral to USDC
-   * 4. Repaying flash loan
-   * 5. Returning remaining assets to user
+   * Requires SDK to be initialized with keypair.
+   * For browser usage, use buildDeleverageTransaction instead.
    */
   async deleverage(params: DeleverageParams): Promise<StrategyResult> {
     this.ensureInitialized();
 
-    const protocol = this.getProtocol(params.protocol);
-
-    // Get current position
-    const position = await protocol.getPosition(this.userAddress);
-    if (!position) {
+    if (!this.keypair) {
       return {
         success: false,
-        error: "No position found to deleverage",
+        error:
+          "Keypair required for execution. Use buildDeleverageTransaction for browser.",
       };
     }
 
-    if (position.debt.amount === 0n) {
-      return {
-        success: false,
-        error: "No debt to repay. Use withdraw instead.",
-      };
-    }
-
-    // Build transaction
     const tx = new Transaction();
     tx.setSender(this.userAddress);
     tx.setGasBudget(100_000_000);
 
     try {
-      await buildDeleverageTransaction(tx, {
-        protocol,
-        flashLoanClient: this.flashLoanClient,
-        swapClient: this.swapClient,
-        suiClient: this.suiClient,
-        userAddress: this.userAddress,
-        position,
-      });
+      await this.buildDeleverageTransaction(tx, params);
 
       if (params.dryRun) {
         return this.dryRun(tx);
@@ -267,6 +384,97 @@ export class DefiDashSDK {
   async hasPosition(protocol: LendingProtocol): Promise<boolean> {
     this.ensureInitialized();
     return this.getProtocol(protocol).hasPosition(this.userAddress);
+  }
+
+  /**
+   * Get max borrowable amount for an asset
+   */
+  async getMaxBorrowable(
+    protocol: LendingProtocol,
+    coinType: string,
+  ): Promise<string> {
+    this.ensureInitialized();
+    return this.getProtocol(protocol).getMaxBorrowableAmount(
+      this.userAddress,
+      this.resolveCoinType(coinType),
+    );
+  }
+
+  /**
+   * Get max withdrawable amount for an asset
+   */
+  async getMaxWithdrawable(
+    protocol: LendingProtocol,
+    coinType: string,
+  ): Promise<string> {
+    this.ensureInitialized();
+    return this.getProtocol(protocol).getMaxWithdrawableAmount(
+      this.userAddress,
+      this.resolveCoinType(coinType),
+    );
+  }
+
+  // ============================================================================
+  // Aggregation Methods
+  // ============================================================================
+
+  /**
+   * Get aggregated market data from all supported protocols
+   */
+  async getAggregatedMarkets(): Promise<Record<string, MarketAsset[]>> {
+    this.ensureInitialized();
+    const result: Record<string, MarketAsset[]> = {};
+    const protocols = [LendingProtocol.Suilend, LendingProtocol.Navi];
+
+    await Promise.all(
+      protocols.map(async (p) => {
+        try {
+          const adapter = this.protocols.get(p);
+          if (adapter) {
+            result[p] = await adapter.getMarkets();
+          }
+        } catch (e) {
+          console.error(`Failed to fetch markets for ${p}`, e);
+          result[p] = [];
+        }
+      }),
+    );
+
+    return result;
+  }
+
+  /**
+   * Get aggregated portfolio data from all supported protocols
+   */
+  async getAggregatedPortfolio(): Promise<AccountPortfolio[]> {
+    this.ensureInitialized();
+    const protocols = [LendingProtocol.Suilend, LendingProtocol.Navi];
+    const address = this.userAddress;
+
+    const portfolios = await Promise.all(
+      protocols.map(async (p) => {
+        try {
+          const adapter = this.protocols.get(p);
+          if (adapter) {
+            return await adapter.getAccountPortfolio(address);
+          }
+        } catch (e) {
+          console.error(`Failed to fetch portfolio for ${p}`, e);
+        }
+        // Return resilient default
+        return {
+          protocol: p,
+          address,
+          healthFactor: Infinity,
+          netValueUsd: 0,
+          totalCollateralUsd: 0,
+          totalDebtUsd: 0,
+          positions: [],
+        } as AccountPortfolio;
+      }),
+    );
+
+    return portfolios;
   }
 
   // ============================================================================
@@ -306,23 +514,18 @@ export class DefiDashSDK {
   }
 
   /**
-   * Get wallet balances
+   * Get the SuiClient instance
    */
-  async getBalances(): Promise<
-    Array<{ coinType: string; symbol: string; balance: string }>
-  > {
+  getSuiClient(): SuiClient {
     this.ensureInitialized();
-    const balances = await this.suiClient.getAllBalances({
-      owner: this.userAddress,
-    });
+    return this.suiClient;
+  }
 
-    return balances
-      .filter((b) => Number(b.totalBalance) > 0)
-      .map((b) => ({
-        coinType: b.coinType,
-        symbol: b.coinType.split("::").pop() || "???",
-        balance: b.totalBalance,
-      }));
+  /**
+   * Get the user address
+   */
+  getUserAddress(): string {
+    return this.userAddress;
   }
 
   // ============================================================================
@@ -348,6 +551,10 @@ export class DefiDashSDK {
   }
 
   private async execute(tx: Transaction): Promise<StrategyResult> {
+    if (!this.keypair) {
+      throw new Error("Keypair required for execution");
+    }
+
     const result = await this.suiClient.signAndExecuteTransaction({
       signer: this.keypair,
       transaction: tx,
