@@ -150,10 +150,11 @@ export async function buildLeverageTransaction(
   const isSui = normalized.endsWith("::sui::SUI");
 
   if (isSui) {
-    // For SUI: split from gas and merge
+    // For SUI: swappedAsset is already Coin<SUI> from swap
+    // Split user's deposit from gas and merge INTO swapped asset
     const [userDeposit] = tx.splitCoins(tx.gas, [depositAmount]);
-    tx.mergeCoins(userDeposit, [swappedAsset]);
-    depositCoin = userDeposit;
+    tx.mergeCoins(swappedAsset, [userDeposit]);
+    depositCoin = swappedAsset;
   } else {
     // For non-SUI: fetch user's coins, merge, split exact amount
     const userCoins = await suiClient.getCoins({
@@ -173,10 +174,10 @@ export async function buildLeverageTransaction(
       tx.mergeCoins(primaryCoin, otherCoins);
     }
 
-    // Split exact deposit amount
+    // Split exact deposit amount and merge with swapped
     const [userContribution] = tx.splitCoins(primaryCoin, [depositAmount]);
-    tx.mergeCoins(userContribution, [swappedAsset]);
-    depositCoin = userContribution;
+    tx.mergeCoins(swappedAsset, [userContribution]);
+    depositCoin = swappedAsset;
   }
 
   // 4. Refresh oracles

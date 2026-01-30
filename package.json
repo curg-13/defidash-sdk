@@ -46,7 +46,9 @@
     "script:scallop-leverage-exec": "ts-node scripts/scallop/scallop_leverage_exec.ts",
     "script:scallop-deleverage": "ts-node scripts/scallop/scallop_deleverage_dryrun.ts",
     "script:scallop-deleverage-exec": "ts-node scripts/scallop/scallop_deleverage_exec.ts",
-    "script:scallop-create-obligation": "ts-node scripts/scallop/scallop_create_obligation.ts"
+    "script:scallop-create-obligation": "ts-node scripts/scallop/scallop_create_obligation.ts",
+    "script:scallop-deposit": "ts-node scripts/scallop/scallop_deposit.ts",
+    "script:scallop-borrow": "ts-node scripts/scallop/scallop_borrow.ts"
   },
   "keywords": [],
   "author": "",

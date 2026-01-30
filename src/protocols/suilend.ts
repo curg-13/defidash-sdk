@@ -13,7 +13,6 @@ import {
 } from "@suilend/sdk";
 import { parseReserve } from "@suilend/sdk/parsers/reserve";
 import { parseObligation } from "@suilend/sdk/parsers/obligation";
-import { refreshReservePrice } from "@suilend/sdk/utils/simulate";
 import { CoinMetadata } from "@mysten/sui/client";
 import { normalizeStructTag } from "@mysten/sui/utils";
 import {
@@ -25,8 +24,8 @@ import {
   LendingProtocol,
   Position,
 } from "../types";
-import { normalizeCoinType, formatUnits } from "../utils";
-import { getReserveByCoinType, SUILEND_RESERVES } from "../lib/suilend/const";
+import { normalizeCoinType } from "../utils";
+import { getReserveByCoinType } from "../lib/suilend/const";
 import { getTokenPrice } from "@7kprotocol/sdk-ts";
 import {
   calculatePortfolioMetrics,
