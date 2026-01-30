@@ -10,6 +10,7 @@ export type PositionSide = "supply" | "borrow";
 export enum LendingProtocol {
   Suilend = "suilend",
   Navi = "navi",
+  Scallop = "scallop",
 }
 
 // ============================================================================

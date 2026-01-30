@@ -5,3 +5,4 @@
 export { ILendingProtocol, ReserveInfo } from "./interface";
 export { SuilendAdapter } from "./suilend";
 export { NaviAdapter } from "./navi";
+export { ScallopAdapter } from "./scallop";

@@ -115,29 +115,36 @@ export async function buildLeverageTransaction(
   );
 
   // 2. Swap USDC → deposit asset
-  const swapQuotes = await swapClient.quote({
-    amountIn: flashLoanUsdc.toString(),
-    coinTypeIn: USDC_COIN_TYPE,
-    coinTypeOut: normalized,
-  });
+  let swappedAsset: any;
 
-  if (swapQuotes.length === 0) {
-    throw new Error(`No swap quotes found for USDC → ${reserve?.symbol}`);
+  if (normalized === USDC_COIN_TYPE) {
+    // No swap needed
+    swappedAsset = loanCoin;
+  } else {
+    const swapQuotes = await swapClient.quote({
+      amountIn: flashLoanUsdc.toString(),
+      coinTypeIn: USDC_COIN_TYPE,
+      coinTypeOut: normalized,
+    });
+
+    if (swapQuotes.length === 0) {
+      throw new Error(`No swap quotes found for USDC → ${reserve?.symbol}`);
+    }
+
+    const bestQuote = swapQuotes.sort(
+      (a, b) => Number(b.amountOut) - Number(a.amountOut)
+    )[0];
+
+    swappedAsset = await swapClient.swap(
+      {
+        quote: bestQuote,
+        signer: userAddress,
+        coinIn: loanCoin,
+        tx: tx,
+      },
+      100 // slippage
+    );
   }
-
-  const bestQuote = swapQuotes.sort(
-    (a, b) => Number(b.amountOut) - Number(a.amountOut)
-  )[0];
-
-  const swappedAsset = await swapClient.swap(
-    {
-      quote: bestQuote,
-      signer: userAddress,
-      coinIn: loanCoin,
-      tx: tx,
-    },
-    100 // slippage
-  );
 
   // 3. Prepare deposit coin (merge user's asset with swapped)
   let depositCoin: any;

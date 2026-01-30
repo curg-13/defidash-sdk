@@ -42,7 +42,13 @@
     "script:navi-leverage-exec": "ts-node scripts/navi/navi_leverage_strategy_exec.ts",
     "script:navi-deleverage": "ts-node scripts/navi/navi_deleverage_strategy_dryrun.ts",
     "script:navi-deleverage-exec": "ts-node scripts/navi/navi_deleverage_strategy_exec.ts",
-    "script:navi-calc": "ts-node scripts/navi/test_navi_calculations.ts"
+    "script:navi-calc": "ts-node scripts/navi/test_navi_calculations.ts",
+    "script:scallop-test": "ts-node scripts/scallop/scallop_test_portfolio.ts",
+    "script:scallop-leverage": "ts-node scripts/scallop/scallop_leverage_dryrun.ts",
+    "script:scallop-leverage-exec": "ts-node scripts/scallop/scallop_leverage_exec.ts",
+    "script:scallop-deleverage": "ts-node scripts/scallop/scallop_deleverage_dryrun.ts",
+    "script:scallop-deleverage-exec": "ts-node scripts/scallop/scallop_deleverage_exec.ts",
+    "script:scallop-create-obligation": "ts-node scripts/scallop/scallop_create_obligation.ts"
   },
   "keywords": [],
   "author": "",
