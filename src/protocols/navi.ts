@@ -16,19 +16,17 @@ import {
   updateOraclePricesPTB,
   getPriceFeeds,
   getHealthFactor,
-  normalizeCoinType as naviNormalize,
 } from "@naviprotocol/lending";
-import { ILendingProtocol, ReserveInfo } from "./interface";
 import {
+  ILendingProtocol,
   PositionInfo,
   AssetPosition,
   USDC_COIN_TYPE,
-  MarketAsset,
   AccountPortfolio,
   LendingProtocol,
   Position,
 } from "../types";
-import { normalizeCoinType } from "../lib/utils";
+import { normalizeCoinType } from "../utils";
 import { getReserveByCoinType } from "../lib/suilend/const";
 import { getTokenPrice } from "@7kprotocol/sdk-ts";
 
@@ -150,11 +148,6 @@ export class NaviAdapter implements ILendingProtocol {
     };
   }
 
-  async hasPosition(userAddress: string): Promise<boolean> {
-    const position = await this.getPosition(userAddress);
-    return position !== null;
-  }
-
   async deposit(
     tx: Transaction,
     coin: any,
@@ -253,81 +246,6 @@ export class NaviAdapter implements ILendingProtocol {
         updatePythPriceFeeds: true,
       });
     }
-  }
-
-  async getReserveInfo(coinType: string): Promise<ReserveInfo | undefined> {
-    this.ensureInitialized();
-
-    const pool = this.getPool(coinType) as any;
-    if (!pool) return undefined;
-
-    const reserve = getReserveByCoinType(
-      normalizeCoinType(pool.coinType ?? pool.suiCoinType ?? ""),
-    );
-
-    return {
-      coinType: pool.coinType,
-      symbol: reserve?.symbol || pool.coinType.split("::").pop() || "???",
-      decimals: reserve?.decimals || 9,
-    };
-  }
-
-  /**
-   * Get all market data
-   */
-  async getMarkets(): Promise<MarketAsset[]> {
-    this.ensureInitialized();
-
-    return this.pools.map((pool: any) => {
-      const coinType = normalizeCoinType(
-        pool.coinType ?? pool.suiCoinType ?? "",
-      );
-      const reserve = getReserveByCoinType(coinType);
-      const decimals = reserve?.decimals || 9;
-      const price = parseFloat(pool.oracle?.price ?? pool.price ?? "0");
-
-      // Helper to parse APY (handle bps vs ratio)
-      // Return APY as decimal (e.g., 0.03 for 3%) to match Suilend format
-      // Navi returns APY in percentage (e.g., 3.161 for 3.161%)
-      // Convert to decimal to match Suilend format
-      const getApy = (raw: any) => {
-        const val = parseFloat(raw ?? "0");
-        return val / 100;
-      };
-
-      const supplyApy = getApy(
-        pool.supplyApy ?? pool.supplyIncentiveApyInfo?.apy,
-      );
-      const borrowApy = getApy(
-        pool.borrowApy ?? pool.borrowIncentiveApyInfo?.apy,
-      );
-
-      return {
-        symbol: reserve?.symbol || coinType.split("::").pop() || "UNKNOWN",
-        coinType,
-        decimals,
-        price,
-        supplyApy,
-        borrowApy,
-        maxLtv: parseFloat(pool.liquidationFactor?.threshold ?? "0.8") - 0.05, // Safety margin
-        liquidationThreshold: parseFloat(
-          pool.liquidationFactor?.threshold ?? "0.8",
-        ),
-        totalSupply:
-          parseFloat(pool.totalSupply ?? pool.totalSupplyAmount ?? "0") /
-          Math.pow(10, decimals),
-        totalBorrow:
-          parseFloat(pool.totalBorrow ?? pool.borrowedAmount ?? "0") /
-          Math.pow(10, decimals),
-        availableLiquidity:
-          parseFloat(
-            pool.leftSupply ??
-              pool.availableBorrow ??
-              pool.leftBorrowAmount ??
-              "0",
-          ) / Math.pow(10, decimals),
-      };
-    });
   }
 
   /**
@@ -454,33 +372,5 @@ export class NaviAdapter implements ILendingProtocol {
       netApy,
       totalAnnualNetEarningsUsd,
     };
-  }
-
-  /**
-   * Get all available pools
-   */
-  getPools() {
-    this.ensureInitialized();
-    return this.pools;
-  }
-
-  async getMaxBorrowableAmount(
-    address: string,
-    coinType: string,
-  ): Promise<string> {
-    // TODO: Implement for Navi
-    throw new Error(
-      "Methods getMaxBorrowableAmount not implemented for Navi yet",
-    );
-  }
-
-  async getMaxWithdrawableAmount(
-    address: string,
-    coinType: string,
-  ): Promise<string> {
-    // TODO: Implement for Navi
-    throw new Error(
-      "Methods getMaxWithdrawableAmount not implemented for Navi yet",
-    );
   }
 }

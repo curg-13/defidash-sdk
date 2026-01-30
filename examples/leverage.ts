@@ -19,7 +19,7 @@ import {
   logLeverageParams,
   logLeveragePreview,
   logStrategyResult,
-} from "../src/lib/utils/logger";
+} from "../src/utils/logger";
 
 const SUI_FULLNODE_URL =
   process.env.SUI_FULLNODE_URL || getFullnodeUrl("mainnet");
@@ -53,26 +53,52 @@ async function main() {
 
   // Config
   const depositAsset = process.env.LEVERAGE_DEPOSIT_COIN_TYPE || "LBTC";
-  const depositAmount = process.env.LEVERAGE_DEPOSIT_AMOUNT
-    ? (Number(process.env.LEVERAGE_DEPOSIT_AMOUNT) / 1e8).toString()
-    : "0.00001";
   const multiplier = parseFloat(process.env.LEVERAGE_MULTIPLIER || "1.5");
+  const protocolEnv = process.env.LEVERAGE_PROTOCOL || "suilend";
   const protocol =
-    process.env.LEVERAGE_PROTOCOL === "navi"
+    protocolEnv === "navi"
       ? LendingProtocol.Navi
-      : LendingProtocol.Suilend;
+      : protocolEnv === "scallop"
+        ? LendingProtocol.Scallop
+        : LendingProtocol.Suilend;
+
+  // Support both depositAmount and depositValueUsd
+  let depositAmount: string | undefined;
+  let depositValueUsd: number | undefined;
+
+  if (process.env.LEVERAGE_DEPOSIT_VALUE_USD) {
+    // Option 1: USD value (e.g., 1.0 for $1 worth)
+    depositValueUsd = parseFloat(process.env.LEVERAGE_DEPOSIT_VALUE_USD);
+    console.log(`   💵 Using USD value: $${depositValueUsd}`);
+  } else if (process.env.LEVERAGE_DEPOSIT_AMOUNT) {
+    // Option 2: Raw amount in token units (converted to human-readable)
+    depositAmount = (
+      Number(process.env.LEVERAGE_DEPOSIT_AMOUNT) / 1e8
+    ).toString();
+    console.log(`   🪙 Using token amount: ${depositAmount} ${depositAsset}`);
+  } else {
+    // Default fallback
+    depositAmount = "0.00001";
+    console.log(`   🪙 Using default amount: ${depositAmount} ${depositAsset}`);
+  }
 
   // Check position
   const position = await sdk.getPosition(protocol);
   logPosition(position, protocol);
 
   // Preview
-  logLeverageParams({ protocol, depositAsset, depositAmount, multiplier });
+  logLeverageParams({
+    protocol,
+    depositAsset,
+    depositAmount: depositAmount || `$${depositValueUsd}`,
+    multiplier,
+  });
 
   try {
     const preview = await sdk.previewLeverage({
       depositAsset,
       depositAmount,
+      depositValueUsd,
       multiplier,
     });
     logLeveragePreview(preview);
@@ -85,6 +111,7 @@ async function main() {
     protocol,
     depositAsset,
     depositAmount,
+    depositValueUsd,
     multiplier,
     dryRun,
   });

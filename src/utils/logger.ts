@@ -4,7 +4,7 @@
  * Common logging functions for test scripts
  */
 
-import { PositionInfo, LeveragePreview, StrategyResult } from "../../types";
+import { PositionInfo, LeveragePreview, StrategyResult } from "../types";
 
 const DIVIDER = "─".repeat(55);
 

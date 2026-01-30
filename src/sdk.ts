@@ -5,7 +5,7 @@
  * Supports both Node.js (with keypair) and Browser (with wallet adapter)
  */
 
-import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
+import { SuiClient } from "@mysten/sui/client";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { Transaction } from "@mysten/sui/transactions";
 import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
@@ -18,13 +18,14 @@ import {
   StrategyResult,
   LeveragePreview,
   SDKOptions,
-  USDC_COIN_TYPE,
   DEFAULT_7K_PARTNER,
-  MarketAsset,
   AccountPortfolio,
+  ILendingProtocol,
+  BrowserLeverageParams,
+  BrowserDeleverageParams,
+  COIN_TYPES,
 } from "./types";
 
-import { ILendingProtocol } from "./protocols/interface";
 import { SuilendAdapter } from "./protocols/suilend";
 import { NaviAdapter } from "./protocols/navi";
 import { ScallopAdapter } from "./protocols/scallop";
@@ -33,29 +34,9 @@ import {
   buildLeverageTransaction as buildLeverageTx,
   calculateLeveragePreview as calcPreview,
 } from "./strategies/leverage";
-import {
-  buildDeleverageTransaction as buildDeleverageTx,
-  calculateDeleverageEstimate,
-} from "./strategies/deleverage";
-import { normalizeCoinType, parseUnits } from "./lib/utils";
-import { getReserveByCoinType, COIN_TYPES } from "./lib/suilend/const";
-
-/**
- * Browser-compatible Leverage Parameters (no dryRun - handled externally)
- */
-export interface BrowserLeverageParams {
-  protocol: LendingProtocol;
-  depositAsset: string;
-  depositAmount: string;
-  multiplier: number;
-}
-
-/**
- * Browser-compatible Deleverage Parameters
- */
-export interface BrowserDeleverageParams {
-  protocol: LendingProtocol;
-}
+import { buildDeleverageTransaction as buildDeleverageTx } from "./strategies/deleverage";
+import { normalizeCoinType, parseUnits } from "./utils";
+import { getReserveByCoinType } from "./lib/suilend/const";
 
 /**
  * DeFi Dash SDK - Main entry point
@@ -225,11 +206,34 @@ export class DefiDashSDK {
   ): Promise<void> {
     this.ensureInitialized();
 
+    // Validate that exactly one of depositAmount or depositValueUsd is provided
+    if (!params.depositAmount && !params.depositValueUsd) {
+      throw new Error(
+        "Either depositAmount or depositValueUsd must be provided",
+      );
+    }
+    if (params.depositAmount && params.depositValueUsd) {
+      throw new Error(
+        "Cannot provide both depositAmount and depositValueUsd. Choose one.",
+      );
+    }
+
     const protocol = this.getProtocol(params.protocol);
     const coinType = this.resolveCoinType(params.depositAsset);
     const reserve = getReserveByCoinType(coinType);
     const decimals = reserve?.decimals || 8;
-    const depositAmount = parseUnits(params.depositAmount, decimals);
+
+    // Convert depositValueUsd to depositAmount if needed
+    let depositAmountStr: string;
+    if (params.depositValueUsd) {
+      const price = await getTokenPrice(coinType);
+      const amountInToken = params.depositValueUsd / price;
+      depositAmountStr = amountInToken.toFixed(decimals);
+    } else {
+      depositAmountStr = params.depositAmount!;
+    }
+
+    const depositAmount = parseUnits(depositAmountStr, decimals);
 
     await buildLeverageTx(tx, {
       protocol,
@@ -383,77 +387,20 @@ export class DefiDashSDK {
     return this.getProtocol(protocol).getPosition(this.userAddress);
   }
 
-  /**
-   * Check if user has a position on specified protocol
-   */
-  async hasPosition(protocol: LendingProtocol): Promise<boolean> {
-    this.ensureInitialized();
-    return this.getProtocol(protocol).hasPosition(this.userAddress);
-  }
-
-  /**
-   * Get max borrowable amount for an asset
-   */
-  async getMaxBorrowable(
-    protocol: LendingProtocol,
-    coinType: string,
-  ): Promise<string> {
-    this.ensureInitialized();
-    return this.getProtocol(protocol).getMaxBorrowableAmount(
-      this.userAddress,
-      this.resolveCoinType(coinType),
-    );
-  }
-
-  /**
-   * Get max withdrawable amount for an asset
-   */
-  async getMaxWithdrawable(
-    protocol: LendingProtocol,
-    coinType: string,
-  ): Promise<string> {
-    this.ensureInitialized();
-    return this.getProtocol(protocol).getMaxWithdrawableAmount(
-      this.userAddress,
-      this.resolveCoinType(coinType),
-    );
-  }
-
   // ============================================================================
   // Aggregation Methods
   // ============================================================================
-
-  /**
-   * Get aggregated market data from all supported protocols
-   */
-  async getAggregatedMarkets(): Promise<Record<string, MarketAsset[]>> {
-    this.ensureInitialized();
-    const result: Record<string, MarketAsset[]> = {};
-    const protocols = [LendingProtocol.Suilend, LendingProtocol.Navi, LendingProtocol.Scallop];
-
-    await Promise.all(
-      protocols.map(async (p) => {
-        try {
-          const adapter = this.protocols.get(p);
-          if (adapter) {
-            result[p] = await adapter.getMarkets();
-          }
-        } catch (e) {
-          console.error(`Failed to fetch markets for ${p}`, e);
-          result[p] = [];
-        }
-      }),
-    );
-
-    return result;
-  }
 
   /**
    * Get aggregated portfolio data from all supported protocols
    */
   async getAggregatedPortfolio(): Promise<AccountPortfolio[]> {
     this.ensureInitialized();
-    const protocols = [LendingProtocol.Suilend, LendingProtocol.Navi, LendingProtocol.Scallop];
+    const protocols = [
+      LendingProtocol.Suilend,
+      LendingProtocol.Navi,
+      LendingProtocol.Scallop,
+    ];
     const address = this.userAddress;
 
     const portfolios = await Promise.all(
@@ -491,13 +438,37 @@ export class DefiDashSDK {
    */
   async previewLeverage(params: {
     depositAsset: string;
-    depositAmount: string;
+    depositAmount?: string;
+    depositValueUsd?: number;
     multiplier: number;
   }): Promise<LeveragePreview> {
+    // Validate that exactly one is provided
+    if (!params.depositAmount && !params.depositValueUsd) {
+      throw new Error(
+        "Either depositAmount or depositValueUsd must be provided",
+      );
+    }
+    if (params.depositAmount && params.depositValueUsd) {
+      throw new Error(
+        "Cannot provide both depositAmount and depositValueUsd. Choose one.",
+      );
+    }
+
     const coinType = this.resolveCoinType(params.depositAsset);
     const reserve = getReserveByCoinType(coinType);
     const decimals = reserve?.decimals || 8;
-    const depositAmount = parseUnits(params.depositAmount, decimals);
+
+    // Convert depositValueUsd to depositAmount if needed
+    let depositAmountStr: string;
+    if (params.depositValueUsd) {
+      const price = await getTokenPrice(coinType);
+      const amountInToken = params.depositValueUsd / price;
+      depositAmountStr = amountInToken.toFixed(decimals);
+    } else {
+      depositAmountStr = params.depositAmount!;
+    }
+
+    const depositAmount = parseUnits(depositAmountStr, decimals);
 
     return calcPreview({
       depositCoinType: coinType,

@@ -17,7 +17,7 @@ import {
   logSDKInit,
   logPosition,
   logStrategyResult,
-} from "../src/lib/utils/logger";
+} from "../src/utils/logger";
 
 const SUI_FULLNODE_URL =
   process.env.SUI_FULLNODE_URL || getFullnodeUrl("mainnet");
@@ -28,14 +28,16 @@ async function main() {
   // Setup
   const secretKey = process.env.SECRET_KEY;
   if (!secretKey || secretKey === "YOUR_SECRET_KEY_HERE") {
-    console.error("❌ Error: SECRET_KEY not found in .env.test file.");
+    console.error("❌ Error: SECRET_KEY not found in .env file.");
     return;
   }
 
   const txMode = process.env.TX_MODE || "dryrun";
   const dryRun = txMode === "dryrun";
   if (!dryRun) {
-    console.log("\n   ⚠️ Dry run mode disabled");
+    console.log(
+      "\n   ⚠️ EXECUTION MODE - Real transactions will be submitted!",
+    );
   }
 
   const suiClient = new SuiClient({ url: SUI_FULLNODE_URL });
@@ -47,19 +49,39 @@ async function main() {
   await sdk.initialize(suiClient, keypair);
   logSDKInit(true);
 
-  // Config
+  // Config - same as leverage.ts for consistency
+  const depositAsset = process.env.LEVERAGE_DEPOSIT_COIN_TYPE || "LBTC";
+  const protocolEnv = process.env.LEVERAGE_PROTOCOL || "suilend";
   const protocol =
-    process.env.LEVERAGE_PROTOCOL === "navi"
+    protocolEnv === "navi"
       ? LendingProtocol.Navi
-      : LendingProtocol.Suilend;
+      : protocolEnv === "scallop"
+        ? LendingProtocol.Scallop
+        : LendingProtocol.Suilend;
+
+  console.log(`\n   📋 Configuration from .env:`);
+  console.log(`      Protocol: ${protocolEnv}`);
+  console.log(`      Expected Collateral: ${depositAsset}`);
 
   // Check position
   const position = await sdk.getPosition(protocol);
   logPosition(position, protocol);
 
   if (!position) {
-    console.log("   Run the leverage test first");
+    console.log("\n   ⚠️ No position found on this protocol.");
+    console.log("   Run the leverage test first to create a position.");
     return;
+  }
+
+  // Verify collateral matches expected asset
+  const positionAsset = position.collateral.symbol;
+  if (positionAsset !== depositAsset) {
+    console.log(
+      `\n   ⚠️ Warning: Position collateral (${positionAsset}) differs from .env setting (${depositAsset})`,
+    );
+    console.log(
+      `   Will deleverage the ${positionAsset} position on ${protocolEnv}`,
+    );
   }
 
   if (position.debt.amount === 0n) {
@@ -68,6 +90,9 @@ async function main() {
   }
 
   // Execute
+  console.log(
+    `\n   🔄 Deleveraging ${positionAsset} position on ${protocolEnv}...`,
+  );
   const result = await sdk.deleverage({
     protocol,
     dryRun,

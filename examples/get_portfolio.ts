@@ -1,68 +1,62 @@
+/**
+ * DefiDash SDK - Portfolio Example
+ *
+ * Fetches aggregated portfolio across all supported protocols
+ */
+
+import * as dotenv from "dotenv";
+dotenv.config({ path: ".env" });
+
 import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
-import { DefiDashSDK } from "../src/index";
-import * as dotenv from "dotenv";
+import { DefiDashSDK } from "../src";
+import {
+  logHeader,
+  logFooter,
+  logWallet,
+  logSDKInit,
+} from "../src/utils/logger";
 
-dotenv.config();
+const SUI_FULLNODE_URL =
+  process.env.SUI_FULLNODE_URL || getFullnodeUrl("mainnet");
 
 async function main() {
+  logHeader("DefiDash SDK - Portfolio");
+
+  // Setup
   const secretKey = process.env.SECRET_KEY;
-  if (!secretKey) {
-    console.error("❌ Error: SECRET_KEY not found in .env file.");
-    console.log(
-      "Please create a .env file with SECRET_KEY=your_suiprivkey_...",
-    );
+  if (!secretKey || secretKey === "YOUR_SECRET_KEY_HERE") {
+    console.error("   Error: SECRET_KEY not found in .env file.");
     return;
   }
 
-  // Handle both suiprivkey... and raw 32-byte hex/base64 if needed, but SDK usually expects suiprivkey or raw bytes
-  let keypair;
-  try {
-    if (secretKey.startsWith("suiprivkey")) {
-      const decoded = decodeSuiPrivateKey(secretKey);
-      keypair = Ed25519Keypair.fromSecretKey(decoded.secretKey);
-    } else {
-      // Fallback for raw
-      keypair = Ed25519Keypair.fromSecretKey(Buffer.from(secretKey, "base64")); // Simplified assumption or let user handle it
-      // Actually, let's assume suiprivkey standard or standard Ed25519 keypair construction
-    }
-  } catch (e) {
-    console.error(
-      "Failed to parse keypair. Ensure SECRET_KEY is valid suiprivkey or compatible format.",
-    );
-    throw e;
-  }
+  const suiClient = new SuiClient({ url: SUI_FULLNODE_URL });
+  const keypair = Ed25519Keypair.fromSecretKey(secretKey as any);
+  logWallet(keypair.getPublicKey().toSuiAddress());
 
-  const address = keypair.getPublicKey().toSuiAddress();
-  console.log(`Using Wallet: ${address}`);
-
-  const client = new SuiClient({ url: getFullnodeUrl("mainnet") });
+  // Initialize SDK
   const sdk = new DefiDashSDK();
-  // We can pass keypair directly to initialize if we want to enable signing,
-  // but for queries, address string is enough.
-  // Let's pass keypair to show full capability.
-  await sdk.initialize(client, keypair);
+  await sdk.initialize(suiClient, keypair);
+  logSDKInit(true);
 
-  console.log(`\nFetching aggregated portfolio...\n`);
-
+  // Fetch aggregated portfolio
+  console.log("\n   Fetching aggregated portfolio...\n");
   const portfolios = await sdk.getAggregatedPortfolio();
 
-  console.log("--- Aggregated Portfolio ---");
   for (const p of portfolios) {
-    console.log(`\nProtocol: ${p.protocol}`);
-    console.log(`Health Factor: ${p.healthFactor}`);
-    console.log(`Net Value: $${p.netValueUsd.toFixed(2)}`);
-    console.log(`Deposited (Supply): $${p.totalDepositedUsd?.toFixed(2)}`);
-    console.log(`Debt (Actual): $${p.totalDebtUsd.toFixed(2)}`);
-    console.log(`Weighted Borrows: $${p.weightedBorrowsUsd?.toFixed(2)}`);
-    console.log(`Borrow Limit: $${p.borrowLimitUsd?.toFixed(2)}`);
-    console.log(`Liq Threshold: $${p.liquidationThresholdUsd?.toFixed(2)}`);
+    console.log(`\n   Protocol: ${p.protocol}`);
+    console.log(`   Health Factor: ${p.healthFactor}`);
+    console.log(`   Net Value: $${p.netValueUsd.toFixed(2)}`);
+    console.log(`   Deposited (Supply): $${p.totalDepositedUsd?.toFixed(2)}`);
+    console.log(`   Debt (Actual): $${p.totalDebtUsd.toFixed(2)}`);
+    console.log(`   Weighted Borrows: $${p.weightedBorrowsUsd?.toFixed(2)}`);
+    console.log(`   Borrow Limit: $${p.borrowLimitUsd?.toFixed(2)}`);
+    console.log(`   Liq Threshold: $${p.liquidationThresholdUsd?.toFixed(2)}`);
 
     if (p.netApy !== undefined) {
-      console.log(`Net APY (Equity): ${p.netApy.toFixed(2)}%`);
+      console.log(`   Net APY (Equity): ${p.netApy.toFixed(2)}%`);
       console.log(
-        `Annual Net Earnings: $${p.totalAnnualNetEarningsUsd?.toFixed(2)}`,
+        `   Annual Net Earnings: $${p.totalAnnualNetEarningsUsd?.toFixed(2)}`,
       );
     }
 
@@ -72,7 +66,6 @@ async function main() {
           Symbol: pos.symbol,
           Side: pos.side,
           Amount: pos.amount,
-          // AmountRaw: pos.amountRaw,
           ValueUSD: pos.valueUsd.toFixed(2),
           APY: (pos.apy * 100).toFixed(2) + "%",
           Rewards:
@@ -85,9 +78,11 @@ async function main() {
         })),
       );
     } else {
-      console.log("No active positions.");
+      console.log("   No active positions.");
     }
   }
+
+  logFooter("Portfolio fetch complete!");
 }
 
 main().catch(console.error);

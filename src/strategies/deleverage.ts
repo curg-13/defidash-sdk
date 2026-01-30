@@ -7,11 +7,8 @@
 import { Transaction } from "@mysten/sui/transactions";
 import { SuiClient } from "@mysten/sui/client";
 import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
-import { ILendingProtocol } from "../protocols/interface";
+import { ILendingProtocol, USDC_COIN_TYPE, PositionInfo } from "../types";
 import { ScallopFlashLoanClient } from "../lib/scallop";
-import { normalizeCoinType, formatUnits } from "../lib/utils";
-import { getReserveByCoinType } from "../lib/suilend/const";
-import { USDC_COIN_TYPE, PositionInfo } from "../types";
 
 export interface DeleverageBuildParams {
   protocol: ILendingProtocol;

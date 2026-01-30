@@ -1,12 +1,20 @@
 /**
- * DeFi Dash SDK - Lending Protocol Interface
- *
- * Abstract interface for lending protocols (Suilend, Navi, etc.)
+ * Protocol interface and related types
  */
 
 import { Transaction } from "@mysten/sui/transactions";
 import { SuiClient } from "@mysten/sui/client";
-import { PositionInfo, MarketAsset, AccountPortfolio } from "../types";
+import { PositionInfo, AccountPortfolio } from "./position";
+
+/**
+ * Market reserve information
+ */
+export interface MarketReserve {
+  coinType: string;
+  id: string;
+  decimals: number;
+  symbol: string;
+}
 
 /**
  * Common interface for all lending protocol adapters
@@ -34,12 +42,6 @@ export interface ILendingProtocol {
    * @returns Position info or null if no position exists
    */
   getPosition(userAddress: string): Promise<PositionInfo | null>;
-
-  /**
-   * Check if user has an existing obligation/position
-   * @param userAddress - Sui address of the user
-   */
-  hasPosition(userAddress: string): Promise<boolean>;
 
   /**
    * Deposit collateral into the lending protocol
@@ -115,63 +117,8 @@ export interface ILendingProtocol {
   ): Promise<void>;
 
   /**
-   * Get reserve/pool info for a coin type
-   * @param coinType - Full coin type string
-   * @returns Reserve info or undefined
-   */
-  getReserveInfo(coinType: string): Promise<ReserveInfo | undefined>;
-
-  /**
-   * Fetch all market data for the protocol
-   */
-  getMarkets(): Promise<MarketAsset[]>;
-
-  /**
    * Fetch aggregated account portfolio
    * @param address - User address
    */
   getAccountPortfolio(address: string): Promise<AccountPortfolio>;
-
-  /**
-   * Calculate max borrowable amount for an asset
-   * @param address - User address
-   * @param coinType - Coin type using full address
-   */
-  getMaxBorrowableAmount(address: string, coinType: string): Promise<string>;
-
-  /**
-   * Calculate max withdrawable amount for an asset
-   * @param address - User address
-   * @param coinType - Coin type using full address
-   */
-  getMaxWithdrawableAmount(address: string, coinType: string): Promise<string>;
-}
-
-/**
- * Reserve/Pool information
- */
-export interface ReserveInfo {
-  /** Coin type */
-  coinType: string;
-
-  /** Token symbol */
-  symbol: string;
-
-  /** Token decimals */
-  decimals: number;
-
-  /** Reserve/Pool ID */
-  id?: string;
-
-  /** Open LTV (loan-to-value) percentage */
-  openLtvPct?: number;
-
-  /** Close LTV (liquidation threshold) percentage */
-  closeLtvPct?: number;
-
-  /** Current deposit APY */
-  depositApy?: number;
-
-  /** Current borrow APY */
-  borrowApy?: number;
 }

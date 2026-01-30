@@ -7,11 +7,10 @@
 import { Transaction } from "@mysten/sui/transactions";
 import { SuiClient } from "@mysten/sui/client";
 import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
-import { ILendingProtocol } from "../protocols/interface";
+import { ILendingProtocol, USDC_COIN_TYPE, LeveragePreview } from "../types";
 import { ScallopFlashLoanClient } from "../lib/scallop";
-import { normalizeCoinType, formatUnits, parseUnits } from "../lib/utils";
+import { normalizeCoinType } from "../utils";
 import { getReserveByCoinType } from "../lib/suilend/const";
-import { USDC_COIN_TYPE, SUI_COIN_TYPE, LeveragePreview } from "../types";
 
 export interface LeverageBuildParams {
   protocol: ILendingProtocol;
@@ -81,7 +80,7 @@ export async function calculateLeveragePreview(params: {
  */
 export async function buildLeverageTransaction(
   tx: Transaction,
-  params: LeverageBuildParams
+  params: LeverageBuildParams,
 ): Promise<void> {
   const {
     protocol,
@@ -111,7 +110,7 @@ export async function buildLeverageTransaction(
   const [loanCoin, receipt] = flashLoanClient.borrowFlashLoan(
     tx,
     flashLoanUsdc,
-    "usdc"
+    "usdc",
   );
 
   // 2. Swap USDC → deposit asset
@@ -132,7 +131,7 @@ export async function buildLeverageTransaction(
     }
 
     const bestQuote = swapQuotes.sort(
-      (a, b) => Number(b.amountOut) - Number(a.amountOut)
+      (a, b) => Number(b.amountOut) - Number(a.amountOut),
     )[0];
 
     swappedAsset = await swapClient.swap(
@@ -142,7 +141,7 @@ export async function buildLeverageTransaction(
         coinIn: loanCoin,
         tx: tx,
       },
-      100 // slippage
+      100, // slippage
     );
   }
 
@@ -196,7 +195,7 @@ export async function buildLeverageTransaction(
     USDC_COIN_TYPE,
     repaymentAmount.toString(),
     userAddress,
-    true // Skip oracle (already done)
+    true, // Skip oracle (already done)
   );
 
   // 8. Repay flash loan
