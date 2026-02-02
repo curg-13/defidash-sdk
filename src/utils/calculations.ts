@@ -5,6 +5,7 @@
  */
 
 import { ScallopFlashLoanClient } from "../protocols/scallop/flash-loan";
+import { parseUnits, formatUnits } from "./format";
 
 /**
  * Flash loan parameters
@@ -197,25 +198,28 @@ export function calculatePositionMetrics(
 /**
  * Convert amount from human-readable to raw units
  *
- * @param humanAmount - Human-readable amount (e.g., "1.5")
+ * Wrapper around parseUnits that accepts both number and string input.
+ *
+ * @param humanAmount - Human-readable amount (e.g., 1.5 or "1.5")
  * @param decimals - Token decimals
  * @returns Raw amount as bigint
  */
 export function toRawUnits(humanAmount: number | string, decimals: number): bigint {
-  const amount = typeof humanAmount === "string" ? parseFloat(humanAmount) : humanAmount;
-  return BigInt(Math.floor(amount * Math.pow(10, decimals)));
+  const amountStr = typeof humanAmount === "number" ? humanAmount.toString() : humanAmount;
+  return parseUnits(amountStr, decimals);
 }
 
 /**
- * Convert amount from raw units to human-readable
+ * Convert amount from raw units to human-readable number
+ *
+ * Wrapper around formatUnits that returns a number instead of string.
  *
  * @param rawAmount - Raw amount (bigint or string)
  * @param decimals - Token decimals
  * @returns Human-readable number
  */
 export function fromRawUnits(rawAmount: bigint | string, decimals: number): number {
-  const amount = typeof rawAmount === "string" ? BigInt(rawAmount) : rawAmount;
-  return Number(amount) / Math.pow(10, decimals);
+  return parseFloat(formatUnits(rawAmount, decimals));
 }
 
 /**
