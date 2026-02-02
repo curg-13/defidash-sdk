@@ -25,9 +25,9 @@ import {
   AccountPortfolio,
   LendingProtocol,
   Position,
-} from "../types";
-import { normalizeCoinType } from "../utils";
-import { getReserveByCoinType } from "../lib/suilend/const";
+} from "../../types";
+import { normalizeCoinType } from "../../utils";
+import { getReserveByCoinType } from "../suilend/constants";
 import { getTokenPrice } from "@7kprotocol/sdk-ts";
 
 // Navi SDK returns balances with 9 decimal precision internally

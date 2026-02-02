@@ -9,7 +9,7 @@ import { SuiClient } from "@mysten/sui/client";
 import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
 import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
 import { ILendingProtocol, USDC_COIN_TYPE, PositionInfo } from "../types";
-import { ScallopFlashLoanClient } from "../lib/scallop";
+import { ScallopFlashLoanClient } from "../protocols/scallop/flash-loan";
 
 export interface DeleverageBuildParams {
   protocol: ILendingProtocol;

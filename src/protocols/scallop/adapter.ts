@@ -24,9 +24,9 @@ import {
   AccountPortfolio,
   LendingProtocol,
   Position,
-} from '../types';
-import { normalizeCoinType } from '../utils';
-import { getReserveByCoinType } from '../lib/suilend/const';
+} from '../../types';
+import { normalizeCoinType } from '../../utils';
+import { getReserveByCoinType } from '../suilend/constants';
 import { getTokenPrice } from '@7kprotocol/sdk-ts';
 
 /**
@@ -212,10 +212,6 @@ export class ScallopAdapter implements ILendingProtocol {
       subsTable: addresses.vesca.subsTable,
       subsWhitelist: addresses.vesca.subsWhitelist,
     };
-
-    console.log(
-      `[ScallopAdapter] Loaded addresses - Core pkg: ${this.coreAddresses.protocolPkg.slice(0, 10)}..., BorrowIncentive pkg: ${this.borrowIncentiveAddresses.pkg.slice(0, 10)}...`,
-    );
   }
 
   /**

@@ -27,10 +27,10 @@ import {
 } from "./types";
 
 import { Scallop } from "@scallop-io/sui-scallop-sdk";
-import { SuilendAdapter } from "./protocols/suilend";
-import { NaviAdapter } from "./protocols/navi";
-import { ScallopAdapter } from "./protocols/scallop";
-import { ScallopFlashLoanClient } from "./lib/scallop";
+import { SuilendAdapter } from "./protocols/suilend/adapter";
+import { NaviAdapter } from "./protocols/navi/adapter";
+import { ScallopAdapter } from "./protocols/scallop/adapter";
+import { ScallopFlashLoanClient } from "./protocols/scallop/flash-loan";
 import { formatUnits } from "./utils";
 import {
   buildLeverageTransaction as buildLeverageTx,
@@ -38,7 +38,7 @@ import {
 } from "./strategies/leverage";
 import { buildDeleverageTransaction as buildDeleverageTx } from "./strategies/deleverage";
 import { normalizeCoinType, parseUnits } from "./utils";
-import { getReserveByCoinType } from "./lib/suilend/const";
+import { getReserveByCoinType } from "./protocols/suilend/constants";
 
 /**
  * DeFi Dash SDK - Main entry point
@@ -434,7 +434,7 @@ export class DefiDashSDK {
             return await adapter.getAccountPortfolio(address);
           }
         } catch (e) {
-          console.error(`Failed to fetch portfolio for ${p}`, e);
+          // Silently skip failed protocol fetches
         }
         // Return resilient default
         return {

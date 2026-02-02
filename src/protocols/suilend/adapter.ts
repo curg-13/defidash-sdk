@@ -23,16 +23,16 @@ import {
   AccountPortfolio,
   LendingProtocol,
   Position,
-} from "../types";
-import { normalizeCoinType } from "../utils";
-import { getReserveByCoinType } from "../lib/suilend/const";
+} from "../../types";
+import { normalizeCoinType } from "../../utils";
+import { getReserveByCoinType } from "./constants";
 import { getTokenPrice } from "@7kprotocol/sdk-ts";
 import {
   calculatePortfolioMetrics,
   calculateRewardsEarned,
   calculateLiquidationPrice,
   calculateRewardApy,
-} from "../lib/suilend/calculators";
+} from "./calculators";
 import BigNumber from "bignumber.js";
 
 // Suilend uses WAD (10^18) for internal precision
@@ -384,11 +384,6 @@ export class SuilendAdapter implements ILendingProtocol {
       const parsed = parseReserve(r, coinMetadataMap);
       parsedReserveMap[normalizeStructTag(parsed.coinType)] = parsed;
     });
-
-    console.log(
-      "SDK Available Reserves:",
-      Object.values(parsedReserveMap).map((r: any) => r.token.symbol),
-    );
 
     const parsedObligation = parseObligation(obligation, parsedReserveMap);
 

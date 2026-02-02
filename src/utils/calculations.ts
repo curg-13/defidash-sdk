@@ -4,7 +4,7 @@
  * Common calculations for DeFi strategies (leverage, deleverage, flash loans, etc.)
  */
 
-import { ScallopFlashLoanClient } from "../lib/scallop";
+import { ScallopFlashLoanClient } from "../protocols/scallop/flash-loan";
 
 /**
  * Flash loan parameters

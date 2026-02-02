@@ -74,11 +74,11 @@ export {
 export * from "./utils";
 
 // Flash Loan
-export { ScallopFlashLoanClient } from "./lib/scallop";
+export { ScallopFlashLoanClient } from "./protocols/scallop/flash-loan";
 
 // Protocol-specific data
 export {
   SUILEND_RESERVES,
   getReserveByCoinType,
   getReserveBySymbol,
-} from "./lib/suilend/const";
+} from "./protocols/suilend/constants";
