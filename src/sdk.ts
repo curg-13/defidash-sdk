@@ -170,7 +170,7 @@ export class DefiDashSDK {
 
     // Look up by symbol
     const upperSymbol = asset.toUpperCase();
-    const coinType = (COIN_TYPES as any)[upperSymbol];
+    const coinType = COIN_TYPES[upperSymbol as keyof typeof COIN_TYPES];
     if (coinType) {
       return normalizeCoinType(coinType);
     }
@@ -229,7 +229,7 @@ export class DefiDashSDK {
 
     // Clear adapter state for new transaction (Scallop tracks unstaked obligations)
     if (params.protocol === LendingProtocol.Scallop) {
-      (protocol as any).clearPendingState?.();
+      protocol.clearPendingState?.();
     }
 
     const coinType = this.resolveCoinType(params.depositAsset);
@@ -292,7 +292,7 @@ export class DefiDashSDK {
 
     // Clear adapter state for new transaction (Scallop tracks unstaked obligations)
     if (params.protocol === LendingProtocol.Scallop) {
-      (protocol as any).clearPendingState?.();
+      protocol.clearPendingState?.();
     }
 
     // Get current position
