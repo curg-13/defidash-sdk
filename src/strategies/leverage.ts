@@ -24,7 +24,35 @@ export interface LeverageBuildParams {
 }
 
 /**
- * Calculate leverage position preview (before execution)
+ * Calculate leverage position preview without executing
+ *
+ * Computes expected position metrics including flash loan amount,
+ * total position value, LTV, and liquidation parameters.
+ *
+ * @param params - Preview calculation parameters
+ * @param params.depositCoinType - Full coin type of deposit asset
+ * @param params.depositAmount - Deposit amount in raw units (bigint)
+ * @param params.multiplier - Target leverage multiplier (e.g., 2.0 for 2x)
+ *
+ * @returns Preview containing position metrics and risk parameters
+ *
+ * @example
+ * ```typescript
+ * const preview = await calculateLeveragePreview({
+ *   depositCoinType: '0x2::sui::SUI',
+ *   depositAmount: 1000000000n,  // 1 SUI
+ *   multiplier: 2.0
+ * });
+ *
+ * console.log(`Flash loan needed: ${preview.flashLoanUsdc / 1e6} USDC`);
+ * console.log(`Total position: $${preview.totalPositionUsd}`);
+ * console.log(`LTV: ${preview.ltvPercent}%`);
+ * ```
+ *
+ * @remarks
+ * - Fetches current market prices from 7k Protocol
+ * - Assumes 60% LTV threshold for liquidation calculations
+ * - Adds 2% buffer to flash loan amount for safety
  */
 export async function calculateLeveragePreview(params: {
   depositCoinType: string;
@@ -67,16 +95,59 @@ export async function calculateLeveragePreview(params: {
 }
 
 /**
- * Build leverage transaction
+ * Build leverage transaction as a Programmable Transaction Block (PTB)
  *
- * Flow:
- * 1. Flash loan USDC from Scallop
- * 2. Swap USDC → deposit asset
- * 3. Merge user's deposit with swapped asset
- * 4. Refresh oracles
- * 5. Deposit total to lending protocol
- * 6. Borrow USDC to repay flash loan
- * 7. Repay flash loan
+ * Constructs an atomic transaction that executes the full leverage strategy.
+ *
+ * **Transaction Flow:**
+ * 1. Borrow USDC via flash loan from Scallop
+ * 2. Swap USDC to deposit asset via 7k Protocol aggregator
+ * 3. Merge user's deposit with swapped amount
+ * 4. Refresh protocol oracles
+ * 5. Deposit total collateral to lending protocol
+ * 6. Borrow USDC from protocol to repay flash loan
+ * 7. Repay flash loan (transaction fails if not repaid)
+ *
+ * @param tx - Sui Transaction object to add commands to
+ * @param params - Leverage build parameters
+ * @param params.protocol - Protocol adapter (Suilend, Scallop, or Navi)
+ * @param params.flashLoanClient - Scallop flash loan client instance
+ * @param params.swapClient - 7k Protocol swap aggregator
+ * @param params.suiClient - Sui blockchain client
+ * @param params.userAddress - User's Sui address
+ * @param params.depositCoinType - Full coin type of deposit asset
+ * @param params.depositAmount - User's deposit amount (raw units)
+ * @param params.multiplier - Target leverage multiplier
+ *
+ * @returns Promise that resolves when transaction is built (does not execute)
+ *
+ * @example
+ * ```typescript
+ * const tx = new Transaction();
+ * tx.setSender(userAddress);
+ *
+ * await buildLeverageTransaction(tx, {
+ *   protocol: suilendAdapter,
+ *   flashLoanClient,
+ *   swapClient,
+ *   suiClient,
+ *   userAddress,
+ *   depositCoinType: '0x2::sui::SUI',
+ *   depositAmount: 1000000000n,
+ *   multiplier: 2.0
+ * });
+ *
+ * // Execute
+ * const result = await client.signAndExecuteTransaction({
+ *   signer: keypair,
+ *   transaction: tx
+ * });
+ * ```
+ *
+ * @remarks
+ * - All operations are atomic - transaction fails completely if any step fails
+ * - Flash loan MUST be repaid in same transaction or entire tx reverts
+ * - Slippage protection applied to swap (1% tolerance)
  */
 export async function buildLeverageTransaction(
   tx: Transaction,

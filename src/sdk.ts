@@ -337,8 +337,53 @@ export class DefiDashSDK {
   /**
    * Execute leverage strategy (Node.js only)
    *
-   * Requires SDK to be initialized with keypair.
-   * For browser usage, use buildLeverageTransaction instead.
+   * Opens a leveraged position by:
+   * 1. Taking a flash loan
+   * 2. Swapping borrowed USDC for deposit asset
+   * 3. Depositing total collateral (user deposit + swapped amount)
+   * 4. Borrowing USDC to repay flash loan
+   *
+   * @param params - Leverage parameters
+   * @param params.protocol - Lending protocol to use (Suilend, Scallop, or Navi)
+   * @param params.depositAsset - Asset symbol (e.g., "SUI", "LBTC") or full coin type
+   * @param params.depositAmount - Amount to deposit (required if depositValueUsd not provided)
+   * @param params.depositValueUsd - USD value to deposit (required if depositAmount not provided)
+   * @param params.multiplier - Leverage multiplier (e.g., 2.0 for 2x leverage)
+   * @param params.dryRun - If true, simulates transaction and returns gas estimate without executing
+   *
+   * @returns Strategy result with success status, transaction digest (if executed), and gas used
+   *
+   * @throws {SDKNotInitializedError} If SDK not initialized
+   * @throws {KeypairRequiredError} If keypair not provided (Node.js mode required)
+   * @throws {InvalidParameterError} If both or neither depositAmount and depositValueUsd provided
+   * @throws {UnknownAssetError} If asset symbol not recognized
+   *
+   * @example
+   * ```typescript
+   * // Leverage with fixed amount
+   * const result = await sdk.leverage({
+   *   protocol: LendingProtocol.Suilend,
+   *   depositAsset: 'LBTC',
+   *   depositAmount: '0.001',
+   *   multiplier: 2.0,
+   *   dryRun: true
+   * });
+   *
+   * // Leverage with USD value
+   * const result = await sdk.leverage({
+   *   protocol: LendingProtocol.Scallop,
+   *   depositAsset: 'SUI',
+   *   depositValueUsd: 100,  // $100 worth of SUI
+   *   multiplier: 3.0,
+   *   dryRun: false
+   * });
+   * ```
+   *
+   * @remarks
+   * - Requires SDK to be initialized with keypair (Node.js mode)
+   * - For browser usage, use {@link buildLeverageTransaction} instead
+   * - Scallop protocol uses optimized native SDK for oracle updates
+   * - Gas is automatically optimized via dry run (20% buffer added)
    */
   async leverage(params: LeverageParams): Promise<StrategyResult> {
     this.ensureInitialized();
@@ -379,8 +424,52 @@ export class DefiDashSDK {
   /**
    * Execute deleverage strategy (Node.js only)
    *
-   * Requires SDK to be initialized with keypair.
-   * For browser usage, use buildDeleverageTransaction instead.
+   * Closes or reduces a leveraged position by:
+   * 1. Taking a flash loan to repay debt
+   * 2. Withdrawing collateral
+   * 3. Swapping portion of collateral to USDC
+   * 4. Repaying flash loan
+   * 5. Keeping remaining collateral
+   *
+   * @param params - Deleverage parameters
+   * @param params.protocol - Lending protocol where position exists
+   * @param params.dryRun - If true, simulates transaction without executing
+   *
+   * @returns Strategy result with success status, transaction digest, and gas used
+   *
+   * @throws {SDKNotInitializedError} If SDK not initialized
+   * @throws {KeypairRequiredError} If keypair not provided (Node.js mode required)
+   * @throws {PositionNotFoundError} If no position exists on the protocol
+   * @throws {NoDebtError} If position has no debt (use withdraw instead)
+   *
+   * @example
+   * ```typescript
+   * // Dry run first to preview
+   * const preview = await sdk.deleverage({
+   *   protocol: LendingProtocol.Suilend,
+   *   dryRun: true
+   * });
+   *
+   * if (preview.success) {
+   *   console.log(`Estimated gas: ${preview.gasUsed}`);
+   *
+   *   // Execute for real
+   *   const result = await sdk.deleverage({
+   *     protocol: LendingProtocol.Suilend,
+   *     dryRun: false
+   *   });
+   *
+   *   if (result.success) {
+   *     console.log(`Position closed: ${result.txDigest}`);
+   *   }
+   * }
+   * ```
+   *
+   * @remarks
+   * - Requires SDK to be initialized with keypair (Node.js mode)
+   * - For browser usage, use {@link buildDeleverageTransaction} instead
+   * - Automatically fetches current position and calculates optimal swap amounts
+   * - Gas is automatically optimized via dry run (20% buffer added)
    */
   async deleverage(params: DeleverageParams): Promise<StrategyResult> {
     this.ensureInitialized();
@@ -418,7 +507,28 @@ export class DefiDashSDK {
   // ============================================================================
 
   /**
-   * Get current lending position
+   * Get current lending position on a specific protocol
+   *
+   * @param protocol - The lending protocol to query
+   *
+   * @returns Position information including collateral, debt, and metrics, or null if no position exists
+   *
+   * @throws {SDKNotInitializedError} If SDK not initialized
+   * @throws {UnsupportedProtocolError} If protocol not supported
+   *
+   * @example
+   * ```typescript
+   * const position = await sdk.getPosition(LendingProtocol.Suilend);
+   *
+   * if (position) {
+   *   console.log(`Collateral: ${position.collateral.amount} ${position.collateral.symbol}`);
+   *   console.log(`Debt: ${position.debt.amount} ${position.debt.symbol}`);
+   *   console.log(`Health Factor: ${position.healthFactor}`);
+   *   console.log(`Net Value: $${position.netValueUsd}`);
+   * } else {
+   *   console.log('No position found');
+   * }
+   * ```
    */
   async getPosition(protocol: LendingProtocol): Promise<PositionInfo | null> {
     this.ensureInitialized();
@@ -431,6 +541,35 @@ export class DefiDashSDK {
 
   /**
    * Get aggregated portfolio data from all supported protocols
+   *
+   * Fetches positions and metrics from Suilend, Navi, and Scallop protocols concurrently.
+   * Resilient to individual protocol failures - returns default values if a protocol fetch fails.
+   *
+   * @returns Array of portfolio data for each protocol
+   *
+   * @throws {SDKNotInitializedError} If SDK not initialized
+   *
+   * @example
+   * ```typescript
+   * const portfolios = await sdk.getAggregatedPortfolio();
+   *
+   * for (const portfolio of portfolios) {
+   *   console.log(`\nProtocol: ${portfolio.protocol}`);
+   *   console.log(`Net Value: $${portfolio.netValueUsd.toFixed(2)}`);
+   *   console.log(`Health Factor: ${portfolio.healthFactor}`);
+   *   console.log(`Collateral: $${portfolio.totalCollateralUsd.toFixed(2)}`);
+   *   console.log(`Debt: $${portfolio.totalDebtUsd.toFixed(2)}`);
+   *
+   *   if (portfolio.positions.length > 0) {
+   *     console.log(`Active positions: ${portfolio.positions.length}`);
+   *   }
+   * }
+   * ```
+   *
+   * @remarks
+   * - Queries all protocols in parallel for better performance
+   * - Returns default empty portfolio if protocol query fails
+   * - Health factor of Infinity indicates no debt (risk-free)
    */
   async getAggregatedPortfolio(): Promise<AccountPortfolio[]> {
     this.ensureInitialized();
@@ -473,6 +612,50 @@ export class DefiDashSDK {
 
   /**
    * Preview leverage position before execution
+   *
+   * Calculates expected position metrics without executing a transaction.
+   * Useful for showing users what their leveraged position will look like.
+   *
+   * @param params - Preview parameters
+   * @param params.depositAsset - Asset symbol (e.g., "SUI", "LBTC") or full coin type
+   * @param params.depositAmount - Amount to deposit (required if depositValueUsd not provided)
+   * @param params.depositValueUsd - USD value to deposit (required if depositAmount not provided)
+   * @param params.multiplier - Target leverage multiplier (e.g., 2.0 for 2x)
+   *
+   * @returns Preview containing position metrics, flash loan details, and risk parameters
+   *
+   * @throws {InvalidParameterError} If both or neither depositAmount and depositValueUsd provided
+   * @throws {UnknownAssetError} If asset symbol not recognized
+   *
+   * @example
+   * ```typescript
+   * // Preview with fixed amount
+   * const preview = await sdk.previewLeverage({
+   *   depositAsset: 'LBTC',
+   *   depositAmount: '0.001',
+   *   multiplier: 2.0
+   * });
+   *
+   * console.log(`Initial Equity: $${preview.initialEquityUsd}`);
+   * console.log(`Flash Loan: ${preview.flashLoanUsdc / 1e6} USDC`);
+   * console.log(`Total Position: $${preview.totalPositionUsd}`);
+   * console.log(`Position LTV: ${preview.ltvPercent.toFixed(1)}%`);
+   * console.log(`Liquidation Price: $${preview.liquidationPrice}`);
+   * console.log(`Price Drop Buffer: ${preview.priceDropBuffer.toFixed(1)}%`);
+   *
+   * // Preview with USD value
+   * const preview2 = await sdk.previewLeverage({
+   *   depositAsset: 'SUI',
+   *   depositValueUsd: 100,  // $100 worth
+   *   multiplier: 3.0
+   * });
+   * ```
+   *
+   * @remarks
+   * - Does not require SDK initialization (standalone utility)
+   * - Fetches current market prices from 7k Protocol
+   * - Calculations are estimates; actual execution may differ slightly
+   * - Higher multipliers increase both returns and liquidation risk
    */
   async previewLeverage(params: {
     depositAsset: string;

@@ -1,11 +1,41 @@
 /**
  * DeFi Dash SDK - Error Classes
  *
- * Standardized error types for the SDK
+ * Standardized, type-safe error types for the SDK.
+ * All custom errors extend DefiDashError for easy catching.
+ *
+ * @module errors
+ *
+ * @example Type-safe error handling
+ * ```typescript
+ * import { UnknownAssetError, SDKNotInitializedError } from 'defi-dash-sdk';
+ *
+ * try {
+ *   await sdk.leverage({ ... });
+ * } catch (error) {
+ *   if (error instanceof UnknownAssetError) {
+ *     console.error('Invalid asset specified');
+ *   } else if (error instanceof SDKNotInitializedError) {
+ *     console.error('Initialize SDK first');
+ *   } else {
+ *     console.error('Unexpected error:', error);
+ *   }
+ * }
+ * ```
  */
 
 /**
  * Base error class for all SDK errors
+ *
+ * Extend this class to create custom SDK errors.
+ *
+ * @example
+ * ```typescript
+ * if (error instanceof DefiDashError) {
+ *   // Handle all SDK errors
+ *   console.error(`SDK Error [${error.name}]: ${error.message}`);
+ * }
+ * ```
  */
 export class DefiDashError extends Error {
   constructor(message: string) {
