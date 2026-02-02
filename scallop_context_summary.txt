@@ -1,7 +1,7 @@
 # Scallop Integration Context Summary - 2026-01-31
 
-## Status: 
-Successfully implemented Leverage (Dry Run & Exec) using native SDK. Deleverage implemented but facing issues with "Locked Obligations" due to Scallop's Borrow Incentive program.
+## Status:
+**COMPLETED** - Both Leverage and Deleverage are now implemented in the SDK with automatic handling of locked obligations.
 
 ## Key Achievements
 
@@ -18,35 +18,64 @@ Successfully implemented Leverage (Dry Run & Exec) using native SDK. Deleverage 
     8. Return Obligation (Hot Potato) and transfer ObligationKey to user.
 - **Result**: Successfully executed real transaction on mainnet.
 
-### 2. Scallop Deleverage Implementation
+### 2. Scallop Deleverage Implementation (FIXED)
 - **Scripts Created**: `scallop_deleverage_dryrun.ts`, `scallop_deleverage_exec.ts`.
-- **Planned Flow**:
+- **Flow**:
     1. Flash loan USDC (debt amount + buffer).
-    2. Repay USDC debt to Scallop.
-    3. Withdraw collateral.
-    4. Swap collateral to USDC.
-    5. Repay Flash Loan.
-- **Challenge**: The user's obligation is "locked" (Error 770 / 0x302).
+    2. **Unstake obligation** if locked (from borrow incentive).
+    3. Update oracles.
+    4. Repay USDC debt to Scallop.
+    5. Withdraw collateral.
+    6. **Optionally restake** obligation to resume rewards.
+    7. Swap collateral to USDC.
+    8. Repay Flash Loan.
+- **Result**: SDK now automatically handles locked obligations.
+
+### 3. SDK ScallopAdapter Updates
+- **File**: `src/protocols/scallop.ts`
+- **New Features**:
+    - `unstakeObligation(tx, obligationId, obligationKeyId)` - Unlocks obligation from borrow incentive
+    - `stakeObligation(tx, obligationId, obligationKeyId)` - Locks obligation for borrow incentive rewards
+    - `isObligationLocked(obligationId)` - Check if obligation is locked
+    - `getObligations(userAddress)` - Get all obligations with locked status
+    - `getObligationDetails(obligationId)` - Get detailed obligation data
+- **Auto-Unstake**: `withdraw()` and `borrow()` now automatically unstake locked obligations
+- **Exported Constants**: `SCALLOP_CORE`, `SCALLOP_BORROW_INCENTIVE`, `SCALLOP_VESCA`
 
 ## Technical Findings
 
 ### 1. Error Codes Resolved
 - **1025 (Stale Oracle)**: Fixed by calling `tx.updateAssetPricesQuick(['coin', 'usdc'])`.
-- **770 (0x302 - Locked Obligation)**: Occurs when trying to borrow/withdraw from a locked obligation.
+- **770 (0x302 - Locked Obligation)**: **FIXED** - SDK now auto-unstakes locked obligations before borrow/withdraw.
 - **1283 (0x503 - Flash Loan Repay Not Enough)**: Fixed by adding buffer to borrow amount to cover the borrow fee deducted by Scallop.
 - **UnusedValueWithoutDrop**: Fixed by transferring the `obligationKey` object.
 
 ### 2. Obligation Locking Mechanism
 - **Cause**: Scallop's **Borrow Incentive** system. When a user "stakes" their obligation to earn rewards (SCA, etc.), the incentive contract calls `protocol::obligation::lock`.
 - **Effects**: Sets `borrow_locked: true` and `lock_key: Option<TypeName>`. Any standard `borrow` or `withdraw` call will abort.
-- **Observed Events**: `ObligationLocked`, `IncentiveAccountStake`.
-- **Observed Functions**: `stake`, `redeem_rewards`.
+- **Solution**: Call `unstake_v2` before borrow/withdraw, optionally `stake` after to re-enable rewards.
 
-## Current Blocker: Deleveraging a Staked Obligation
-- In Scallop, if an obligation is staked in the Borrow Incentive, it must be "unstaked" (unlocked) before standard withdrawal/borrowing, OR the transaction must be wrapped in incentive-aware calls.
-- The `scallop-deleverage` script currently fails because it detects the user's obligation is locked.
+### 3. Mainnet Contract Addresses
+- **Borrow Incentive Package**: `0x35241d7ff3bf163c2fbd3c2b11fb5710d3946c56ccc9c80813a1f8c6f6acdd67`
+- **Incentive Config**: `0xdf5d04b4691cc67e82fd4db8394d89ff44823a9de29716c924f74bb4f11cc1f7`
+- **Incentive Pools**: `0x6547e143d406b5ccd5f46aae482497de279cc1a68c406f701df70a05f9212ab4`
+- **Incentive Accounts**: `0xc4701fdbc1c92f9a636d334d66012b3027659e9fb8aff27279a82edfb6b77d02`
 
-## Next Steps
-1. Investigate `borrowIncentiveBuilder.ts` in the Scallop SDK.
-2. Determine how to incorporate `unstake` or `withdraw_with_incentive` into the deleverage PTB.
-3. Update Deleverage scripts to handle staked obligations.
+## Usage Example
+
+```typescript
+import { ScallopAdapter } from "./protocols/scallop";
+
+const scallop = new ScallopAdapter();
+await scallop.initialize(suiClient);
+
+// Get obligations with locked status
+const obligations = await scallop.getObligations(userAddress);
+console.log(obligations[0].locked); // true if staked in borrow incentive
+
+// Withdraw - automatically unstakes if locked
+const withdrawnCoin = await scallop.withdraw(tx, coinType, amount, userAddress);
+
+// Optionally restake after operations to resume earning rewards
+scallop.stakeObligation(tx, obligationId, obligationKeyId);
+```

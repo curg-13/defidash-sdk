@@ -152,7 +152,7 @@ export async function buildLeverageTransaction(
   if (isSui) {
     // For SUI: swappedAsset is already Coin<SUI> from swap
     // Split user's deposit from gas and merge INTO swapped asset
-    const [userDeposit] = tx.splitCoins(tx.gas, [depositAmount]);
+    const [userDeposit] = tx.splitCoins(tx.gas, [tx.pure.u64(depositAmount)]);
     tx.mergeCoins(swappedAsset, [userDeposit]);
     depositCoin = swappedAsset;
   } else {
@@ -175,7 +175,7 @@ export async function buildLeverageTransaction(
     }
 
     // Split exact deposit amount and merge with swapped
-    const [userContribution] = tx.splitCoins(primaryCoin, [depositAmount]);
+    const [userContribution] = tx.splitCoins(primaryCoin, [tx.pure.u64(depositAmount)]);
     tx.mergeCoins(swappedAsset, [userContribution]);
     depositCoin = swappedAsset;
   }
@@ -186,15 +186,22 @@ export async function buildLeverageTransaction(
   // 5. Deposit to lending protocol
   await protocol.deposit(tx, depositCoin, normalized, userAddress);
 
-  // 6. Calculate repayment amount (flash loan + fee)
+  // 6. Calculate repayment amount (flash loan + fee + borrow interest buffer)
   const flashLoanFee = ScallopFlashLoanClient.calculateFee(flashLoanUsdc);
   const repaymentAmount = flashLoanUsdc + flashLoanFee;
+
+  // Add 0.5% buffer for borrow interest that accrues immediately
+  // This ensures we borrow enough to cover the flash loan repayment
+  const BORROW_FEE_BUFFER = 1.005;
+  const borrowAmount = BigInt(
+    Math.ceil(Number(repaymentAmount) * BORROW_FEE_BUFFER),
+  );
 
   // 7. Borrow USDC to repay flash loan
   const borrowedUsdc = await protocol.borrow(
     tx,
     USDC_COIN_TYPE,
-    repaymentAmount.toString(),
+    borrowAmount.toString(),
     userAddress,
     true, // Skip oracle (already done)
   );

@@ -10,7 +10,8 @@ import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { getTokenPrice } from "@7kprotocol/sdk-ts";
-import { getReserveByCoinType, COIN_TYPES } from "../../src/lib/suilend/const";
+import { getReserveByCoinType } from "../../src/lib/suilend/const";
+import { COIN_TYPES } from "../../src/types/constants";
 
 // Config from .env.public
 const SUI_COIN_TYPE = "0x2::sui::SUI";

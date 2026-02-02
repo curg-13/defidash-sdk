@@ -5,9 +5,12 @@
  * Flow:
  * 1. Flash loan USDC from Scallop
  * 2. Swap USDC to deposit asset (7k aggregator)
- * 3. Create new obligation and deposit as collateral
+ * 3. Reuse existing obligation OR create new one, then deposit as collateral
  * 4. Borrow USDC to repay flash loan
  * 5. Repay flash loan
+ *
+ * NOTE: This script will automatically reuse your existing obligation if you have one,
+ * instead of creating a new obligation each time. This keeps your positions consolidated.
  *
  * USAGE:
  * - Default (Dry Run): npm run script:scallop-leverage-exec
@@ -24,8 +27,7 @@ import { Scallop } from "@scallop-io/sui-scallop-sdk";
 import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
 import { ScallopFlashLoanClient } from "../../src/lib/scallop";
 import { normalizeCoinType, formatUnits, parseUnits } from "../../src/utils";
-import { COIN_TYPES } from "../../src/types/constants";
-import { getReserveByCoinType } from "../../src/lib/suilend/const";
+import { COIN_TYPES, COIN_DECIMALS } from "../../src/types/constants";
 
 const USDC_COIN_TYPE = COIN_TYPES.USDC;
 
@@ -39,6 +41,8 @@ const COIN_NAME_MAP: Record<string, string> = {
     "wusdc",
   "0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN":
     "wusdt",
+  "0x876a4b7bce8aeaef60464c11f4026903e9afacab79b9b142686158aa86560b50::xbtc::XBTC":
+    "xbtc",
 };
 
 function getCoinName(coinType: string): string {
@@ -52,7 +56,7 @@ function getCoinName(coinType: string): string {
 
 // Configuration from environment
 const DEPOSIT_ASSET = process.env.LEVERAGE_DEPOSIT_COIN_TYPE || "SUI";
-const DEPOSIT_AMOUNT = process.env.LEVERAGE_DEPOSIT_AMOUNT || "1"; // Human-readable
+const DEPOSIT_AMOUNT = process.env.LEVERAGE_DEPOSIT_AMOUNT || "1"; // Human-readable (e.g., "1" = 1 SUI)
 const MULTIPLIER = parseFloat(process.env.LEVERAGE_MULTIPLIER || "2");
 const DRY_RUN_ONLY = process.env.DRY_RUN_ONLY !== "false"; // Default to true for safety
 
@@ -102,13 +106,12 @@ async function main() {
       COIN_TYPES.SUI;
   }
 
-  const reserve = getReserveByCoinType(depositCoinType);
-  const decimals = reserve?.decimals || 9;
-  const symbol = reserve?.symbol || "SUI";
+  const decimals = COIN_DECIMALS[depositCoinType] || 9;
+  const symbol = depositCoinType.split("::").pop()?.toUpperCase() || "SUI";
   const coinName = getCoinName(depositCoinType);
   const isSui = depositCoinType.endsWith("::sui::SUI");
 
-  // 3. Calculate leverage amounts
+  // 3. Calculate leverage amounts (DEPOSIT_AMOUNT is human-readable)
   const depositPrice = await getTokenPrice(depositCoinType);
   const depositAmountHuman = parseFloat(DEPOSIT_AMOUNT);
   const depositAmountRaw = parseUnits(DEPOSIT_AMOUNT, decimals);
@@ -135,7 +138,9 @@ async function main() {
   console.log("─".repeat(60));
   console.log(`  Protocol:       Scallop`);
   console.log(`  Deposit Asset:  ${symbol} (${coinName})`);
-  console.log(`  Deposit Amount: ${DEPOSIT_AMOUNT} ${symbol}`);
+  console.log(
+    `  Deposit Amount: ${depositAmountHuman} ${symbol} (raw: ${depositAmountRaw})`,
+  );
   console.log(`  Multiplier:     ${MULTIPLIER}x`);
   console.log(
     `  Mode:           ${DRY_RUN_ONLY ? "🟡 DRY RUN" : "🔴 REAL EXECUTION"}`,
@@ -168,8 +173,35 @@ async function main() {
   await scallop.init();
 
   const builder = await scallop.createScallopBuilder();
+  const client = await scallop.createScallopClient();
   const tx = builder.createTxBlock();
   tx.setSender(userAddress);
+
+  // Check for existing obligations
+  const existingObligations = await client.getObligations();
+  const hasExistingObligation = existingObligations.length > 0;
+  let existingObligationId: string | null = null;
+  let existingObligationKeyId: string | null = null;
+
+  let isCurrentlyLocked = false;
+
+  if (hasExistingObligation) {
+    existingObligationId = existingObligations[0].id;
+    existingObligationKeyId = existingObligations[0].keyId;
+    isCurrentlyLocked = existingObligations[0].locked;
+
+    console.log(
+      `\n✅ Found existing obligation: ${existingObligationId.slice(0, 20)}...`,
+    );
+
+    if (isCurrentlyLocked) {
+      console.log(`   🔒 Currently staked for Borrow Incentive (will auto-unstake/restake)`);
+    }
+
+    console.log(`   Will reuse instead of creating new one.`);
+  } else {
+    console.log(`\n📝 No existing obligation found. Will create a new one.`);
+  }
 
   try {
     // 5. Get swap quote
@@ -216,7 +248,7 @@ async function main() {
     );
 
     // Step 3: Prepare user's deposit
-    console.log(`  Step 3: Prepare ${DEPOSIT_AMOUNT} ${symbol} from user`);
+    console.log(`  Step 3: Prepare ${depositAmountHuman} ${symbol} from user`);
     let depositCoin: any;
     if (isSui) {
       const [userDeposit] = tx.splitSUIFromGas([Number(depositAmountRaw)]);
@@ -247,11 +279,38 @@ async function main() {
       depositCoin = userContribution;
     }
 
-    // Step 4: Create new obligation and add collateral
-    console.log(`  Step 4: Create obligation and add ${symbol} as collateral`);
-    const [obligation, obligationKey, obligationHotPotato] =
-      tx.openObligation();
-    tx.addCollateral(obligation, depositCoin, coinName);
+    // Step 4: Use existing obligation or create new one, then add collateral
+    let obligation: any;
+    let obligationKey: any;
+    let obligationHotPotato: any;
+    let isNewObligation = false;
+
+    if (
+      hasExistingObligation &&
+      existingObligationId &&
+      existingObligationKeyId
+    ) {
+      obligation = tx.txBlock.object(existingObligationId);
+      obligationKey = tx.txBlock.object(existingObligationKeyId);
+
+      // Unstake if currently locked (required for borrow/withdraw operations)
+      if (isCurrentlyLocked) {
+        console.log(`  Step 4a: Unstake obligation (required for operations)`);
+        tx.unstakeObligation(obligation, obligationKey);
+      }
+
+      console.log(
+        `  Step 4: Reuse existing obligation and add ${symbol} as collateral`,
+      );
+      tx.addCollateral(obligation, depositCoin, coinName);
+    } else {
+      console.log(
+        `  Step 4: Create new obligation and add ${symbol} as collateral`,
+      );
+      [obligation, obligationKey, obligationHotPotato] = tx.openObligation();
+      tx.addCollateral(obligation, depositCoin, coinName);
+      isNewObligation = true;
+    }
 
     // Step 5: Update oracles
     console.log(`  Step 5: Update oracles for ${coinName} and usdc`);
@@ -270,10 +329,21 @@ async function main() {
     console.log(`  Step 7: Repay flash loan`);
     await tx.repayFlashLoan(borrowedUsdc, receipt, "usdc");
 
-    // Step 8: Finalize
-    console.log(`  Step 8: Finalize obligation`);
-    tx.returnObligation(obligation, obligationHotPotato);
-    tx.transferObjects([obligationKey], userAddress);
+    // Step 8: Finalize obligation and stake for borrow incentive rewards
+    if (isNewObligation) {
+      console.log(`  Step 8: Finalize new obligation`);
+      tx.returnObligation(obligation, obligationHotPotato);
+
+      // Step 9: Stake new obligation for borrow incentive rewards
+      console.log(`  Step 9: Stake obligation for borrow incentive rewards`);
+      tx.stakeObligation(obligation, obligationKey);
+      tx.transferObjects([obligationKey], userAddress);
+    } else {
+      // Re-stake existing obligation for borrow incentive rewards
+      // Use low-level method to bypass SDK's locked state check
+      console.log(`  Step 8: Stake obligation for borrow incentive rewards`);
+      tx.stakeObligation(obligation, obligationKey);
+    }
 
     // 7. Execute or Dry Run
     console.log(`\n${"─".repeat(60)}`);

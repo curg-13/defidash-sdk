@@ -21,6 +21,7 @@ export const COIN_TYPES = {
   ETH: "0xd0e89b2af5e4910726fbcd8b8dd37bb79b29e5f83f7491bca830e94f7f226d29::eth::ETH",
   BTC: "0xaafb102dd0902f5055cadecd687fb5b71ca82ef0e0285d90afde828ec58ca96b::btc::BTC",
   LBTC: "0x3e8e9423d80e1774a7ca128fccd8bf5f1f7753be658c5e645929037f7c819040::lbtc::LBTC",
+  XBTC: "0x876a4b7bce8aeaef60464c11f4026903e9afacab79b9b142686158aa86560b50::xbtc::XBTC",
   WAL: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL",
   DEEP: "0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP",
   wUSDC:
@@ -29,3 +30,18 @@ export const COIN_TYPES = {
     "0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN",
   wETH: "0xaf8cd5edc19c4512f4259f0bee101a40d41ebed738ade5874359610ef8eeced5::coin::COIN",
 } as const;
+
+export const COIN_DECIMALS: Record<string, number> = {
+  [COIN_TYPES.SUI]: 9,
+  [COIN_TYPES.USDC]: 6,
+  [COIN_TYPES.USDT]: 6,
+  [COIN_TYPES.ETH]: 8,
+  [COIN_TYPES.BTC]: 8,
+  [COIN_TYPES.LBTC]: 8,
+  [COIN_TYPES.XBTC]: 8,
+  [COIN_TYPES.WAL]: 9,
+  [COIN_TYPES.DEEP]: 6,
+  [COIN_TYPES.wUSDC]: 6,
+  [COIN_TYPES.wUSDT]: 6,
+  [COIN_TYPES.wETH]: 8,
+};

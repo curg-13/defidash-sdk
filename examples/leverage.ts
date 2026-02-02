@@ -46,8 +46,8 @@ async function main() {
   const keypair = Ed25519Keypair.fromSecretKey(secretKey as any);
   logWallet(keypair.getPublicKey().toSuiAddress());
 
-  // Initialize SDK
-  const sdk = new DefiDashSDK();
+  // Initialize SDK (pass secretKey for Scallop support)
+  const sdk = new DefiDashSDK({ secretKey });
   await sdk.initialize(suiClient, keypair);
   logSDKInit(true);
 

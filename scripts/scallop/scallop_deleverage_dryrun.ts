@@ -1,7 +1,10 @@
 /**
  * Scallop Deleverage Strategy - Dry Run
  *
- * Uses Scallop native SDK to close leveraged position:
+ * Uses plain Transaction (not Scallop SDK wrapper) for better compatibility with 7k swap.
+ * This approach is same as SDK's deleverage strategy.
+ *
+ * Flow:
  * 1. Flash loan USDC from Scallop (to repay debt)
  * 2. Repay all USDC debt on Scallop
  * 3. Withdraw all collateral from Scallop
@@ -18,6 +21,8 @@ dotenv.config({ path: ".env.scripts" });
 import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
+import { Transaction } from "@mysten/sui/transactions";
+import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
 import { Scallop } from "@scallop-io/sui-scallop-sdk";
 import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
 import { ScallopFlashLoanClient } from "../../src/lib/scallop";
@@ -27,30 +32,32 @@ import { getReserveByCoinType } from "../../src/lib/suilend/const";
 
 const USDC_COIN_TYPE = COIN_TYPES.USDC;
 
-// Scallop coin name mapping
-const COIN_NAME_MAP: Record<string, string> = {
-  "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI":
-    "sui",
-  "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC":
-    "usdc",
-  "0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN":
-    "wusdc",
-  "0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN":
-    "wusdt",
+// Scallop coin name to type mapping
+const COIN_TYPE_MAP: Record<string, string> = {
+  sui: "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI",
+  usdc: "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC",
+  wusdc:
+    "0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN",
+  wusdt:
+    "0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN",
+  xbtc: "0xaafb102dd0902f5055cadecd687fb5b71ca82ef0e0285d90afde828ec58ca96b::btc::BTC",
 };
+
+function getCoinType(coinName: string): string {
+  return COIN_TYPE_MAP[coinName.toLowerCase()] || coinName;
+}
 
 function getCoinName(coinType: string): string {
   const normalized = normalizeCoinType(coinType);
-  return (
-    COIN_NAME_MAP[normalized] ||
-    normalized.split("::").pop()?.toLowerCase() ||
-    "sui"
-  );
+  for (const [name, type] of Object.entries(COIN_TYPE_MAP)) {
+    if (normalizeCoinType(type) === normalized) return name;
+  }
+  return normalized.split("::").pop()?.toLowerCase() || "unknown";
 }
 
 async function main() {
   console.log("═".repeat(60));
-  console.log("  Scallop Deleverage Strategy - DRY RUN");
+  console.log("  Scallop Deleverage Strategy - DRY RUN (Plain Transaction)");
   console.log("═".repeat(60));
 
   // 1. Setup
@@ -82,7 +89,7 @@ async function main() {
       "0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf",
   });
 
-  // 2. Initialize Scallop SDK
+  // 2. Initialize Scallop SDK (only for querying addresses and positions)
   console.log(`\n🔄 Initializing Scallop SDK...`);
   const scallop = new Scallop({
     secretKey: secretKey,
@@ -91,6 +98,37 @@ async function main() {
   await scallop.init();
 
   const client = await scallop.createScallopClient();
+
+  // Get addresses from Scallop SDK
+  const addresses = scallop.client.address.getAddresses();
+  if (!addresses) {
+    throw new Error("Failed to get Scallop addresses");
+  }
+
+  const coreAddresses = {
+    protocolPkg: addresses.core.packages?.protocol?.id || "",
+    version: addresses.core.version,
+    market: addresses.core.market,
+    coinDecimalsRegistry: addresses.core.coinDecimalsRegistry,
+    xOracle: addresses.core.oracles.xOracle,
+    obligationAccessStore: addresses.core.obligationAccessStore,
+  };
+
+  const borrowIncentiveAddresses = {
+    pkg: addresses.borrowIncentive.id,
+    config: addresses.borrowIncentive.config,
+    incentivePools: addresses.borrowIncentive.incentivePools,
+    incentiveAccounts: addresses.borrowIncentive.incentiveAccounts,
+  };
+
+  const veScaAddresses = {
+    subsTable: addresses.vesca.subsTable,
+    subsWhitelist: addresses.vesca.subsWhitelist,
+  };
+
+  console.log(
+    `   Protocol pkg: ${coreAddresses.protocolPkg.slice(0, 16)}...`,
+  );
 
   // 3. Get current Scallop position
   console.log(`\n📊 Fetching current Scallop position...`);
@@ -112,7 +150,6 @@ async function main() {
       obligationDetails.collaterals.length === 0) &&
     (!obligationDetails.debts || obligationDetails.debts.length === 0)
   ) {
-    // Try the other obligations if the first one is empty
     for (let i = 1; i < obligations.length; i++) {
       const details = await client.queryObligation(obligations[i].id);
       if (
@@ -134,8 +171,10 @@ async function main() {
 
   const obligationId = selectedObligation.id;
   const obligationKeyId = selectedObligation.keyId;
+  const isLocked = selectedObligation.locked;
+
   console.log(
-    `   Using obligation: ${obligationId.slice(0, 20)}...${selectedObligation.locked ? " (LOCKED - will unstake in PTB)" : ""}`,
+    `   Using obligation: ${obligationId.slice(0, 20)}...${isLocked ? " 🔒 LOCKED" : ""}`,
   );
 
   const collaterals = obligationDetails.collaterals || [];
@@ -153,7 +192,6 @@ async function main() {
   let supplyAmount = 0n;
   let supplySymbol = "";
   let supplyDecimals = 9;
-  let supplyCoinName = "";
 
   let borrowCoinType = "";
   let borrowAmount = 0n;
@@ -174,7 +212,6 @@ async function main() {
     supplyAmount = amount;
     supplySymbol = symbol;
     supplyDecimals = decimals;
-    supplyCoinName = getCoinName(coinType);
   }
 
   for (const debt of debts as any[]) {
@@ -199,7 +236,6 @@ async function main() {
 
   if (!borrowCoinType || borrowAmount === 0n) {
     console.log(`\n⚠️  No borrow position found - nothing to deleverage`);
-    console.log(`   Use a simple withdraw instead.`);
     return;
   }
 
@@ -225,25 +261,20 @@ async function main() {
   console.log("─".repeat(60));
 
   try {
-    // 4. Calculate flash loan amount (borrow amount + buffer for interest and fees)
-    // Add 0.5% buffer for interest accrued between calculation and execution
-    const borrowAmountWithInterest =
-      (borrowAmount * BigInt(1005)) / BigInt(1000);
-    const flashLoanBuffer =
-      (borrowAmountWithInterest * BigInt(102)) / BigInt(100); // 2% buffer for fees
-    const flashLoanUsdc = flashLoanBuffer;
+    // 4. Calculate flash loan amount
+    const borrowAmountWithInterest = (borrowAmount * 1005n) / 1000n;
+    const flashLoanUsdc = borrowAmountWithInterest;
     const flashLoanFee = ScallopFlashLoanClient.calculateFee(flashLoanUsdc);
     const totalRepayment = flashLoanUsdc + flashLoanFee;
 
     console.log(`\n🔍 Flash Loan Details:`);
     console.log(`  Debt (estimated): ${formatUnits(borrowAmount, 6)} USDC`);
     console.log(
-      `  Flash Loan:       ${formatUnits(flashLoanUsdc, 6)} USDC (includes interest buffer)`,
+      `  Flash Loan:       ${formatUnits(flashLoanUsdc, 6)} USDC (includes buffer)`,
     );
     console.log(`  Flash Fee:        ${formatUnits(flashLoanFee, 6)} USDC`);
 
-    // 5. Get swap quote: collateral → USDC
-    // Plan to withdraw 100% of collateral
+    // 5. Get swap quote
     const withdrawAmount = supplyAmount;
 
     console.log(`\n🔍 Fetching swap quote: ${supplySymbol} → USDC...`);
@@ -265,83 +296,129 @@ async function main() {
     const expectedUsdcOut = BigInt(bestQuote.amountOut);
 
     console.log(
+      `  Route: ${(bestQuote as any).routes?.map((r: any) => r.dex || r.name || "unknown").join(" → ") || "unknown"}`,
+    );
+    console.log(
       `  Swap: ${formatUnits(withdrawAmount, supplyDecimals)} ${supplySymbol} → ${formatUnits(expectedUsdcOut, 6)} USDC`,
     );
 
-    // 6. Build Transaction using Scallop SDK
-    console.log(`\n🔧 Building transaction...`);
+    // 6. Build Transaction using plain Transaction (NOT Scallop SDK wrapper)
+    console.log(`\n🔧 Building transaction (Plain Transaction)...`);
 
-    const builder = await scallop.createScallopBuilder();
-    const tx = builder.createTxBlock();
+    const tx = new Transaction();
     tx.setSender(userAddress);
+    tx.setGasBudget(50_000_000); // 0.05 SUI
+
+    const flashLoanClient = new ScallopFlashLoanClient({
+      protocolPkg: coreAddresses.protocolPkg,
+      version: coreAddresses.version,
+      market: coreAddresses.market,
+    });
+
+    // Step 0: Unstake obligation if locked
+    if (isLocked) {
+      console.log(`  Step 0: Unstake obligation (required for operations)`);
+      const clockRef = tx.sharedObjectRef({
+        objectId: SUI_CLOCK_OBJECT_ID,
+        mutable: false,
+        initialSharedVersion: "1",
+      });
+      tx.moveCall({
+        target: `${borrowIncentiveAddresses.pkg}::user::unstake_v2`,
+        arguments: [
+          tx.object(borrowIncentiveAddresses.config),
+          tx.object(borrowIncentiveAddresses.incentivePools),
+          tx.object(borrowIncentiveAddresses.incentiveAccounts),
+          tx.object(obligationKeyId),
+          tx.object(obligationId),
+          tx.object(veScaAddresses.subsTable),
+          tx.object(veScaAddresses.subsWhitelist),
+          clockRef,
+        ],
+      });
+    }
 
     // Step 1: Flash loan USDC
     console.log(`  Step 1: Flash loan ${formatUnits(flashLoanUsdc, 6)} USDC`);
-    const [loanCoin, receipt] = await tx.borrowFlashLoan(
-      Number(flashLoanUsdc),
+    const [loanCoin, receipt] = flashLoanClient.borrowFlashLoan(
+      tx,
+      flashLoanUsdc,
       "usdc",
     );
 
-    // Step 2: Unstake obligation if it's locked (for Borrow Incentive)
-    console.log(`  Step 2: Check and unstake obligation if locked`);
-    await tx.unstakeObligationQuick(obligationId, obligationKeyId);
+    // Step 2: Repay debt
+    console.log(`  Step 2: Repay USDC debt`);
+    const clockRef = tx.sharedObjectRef({
+      objectId: SUI_CLOCK_OBJECT_ID,
+      mutable: false,
+      initialSharedVersion: "1",
+    });
+    tx.moveCall({
+      target: `${coreAddresses.protocolPkg}::repay::repay`,
+      typeArguments: [borrowCoinType],
+      arguments: [
+        tx.object(coreAddresses.version),
+        tx.object(obligationId),
+        tx.object(coreAddresses.market),
+        loanCoin as any,
+        clockRef,
+      ],
+    });
 
-    // Step 3: Update oracles
-    console.log(`  Step 3: Update oracles for ${supplyCoinName} and usdc`);
-    await tx.updateAssetPricesQuick([supplyCoinName, "usdc"]);
-
-    // Step 4: Repay ALL debt on Scallop
-    console.log(`  Step 4: Repay USDC debt (using flash loan coin)`);
-    // Pass the whole loanCoin (it contains 100.5% of estimated debt).
-    await tx.repay(tx.txBlock.object(obligationId), loanCoin, "usdc");
-
-    // Step 5: Withdraw ALL collateral
+    // Step 3: Withdraw collateral
     console.log(
-      `  Step 5: Withdraw ${formatUnits(withdrawAmount, supplyDecimals)} ${supplySymbol}`,
+      `  Step 3: Withdraw ${formatUnits(withdrawAmount, supplyDecimals)} ${supplySymbol}`,
     );
-    const withdrawnCoin = await tx.takeCollateral(
-      tx.txBlock.object(obligationId),
-      tx.txBlock.object(obligationKeyId),
-      Number(withdrawAmount),
-      supplyCoinName,
-    );
+    const clockRef2 = tx.sharedObjectRef({
+      objectId: SUI_CLOCK_OBJECT_ID,
+      mutable: false,
+      initialSharedVersion: "1",
+    });
+    const [withdrawnCoin] = tx.moveCall({
+      target: `${coreAddresses.protocolPkg}::withdraw_collateral::withdraw_collateral`,
+      typeArguments: [supplyCoinType],
+      arguments: [
+        tx.object(coreAddresses.version),
+        tx.object(obligationId),
+        tx.object(obligationKeyId),
+        tx.object(coreAddresses.market),
+        tx.object(coreAddresses.coinDecimalsRegistry),
+        tx.pure.u64(withdrawAmount),
+        tx.object(coreAddresses.xOracle),
+        clockRef2,
+      ],
+    });
 
-    // Step 6: Restake obligation
-    console.log(`  Step 6: Restake obligation to resume rewards readiness`);
-    await tx.stakeObligationQuick(obligationId, obligationKeyId);
-
-    // Step 7: Swap withdrawn collateral → USDC
-    console.log(`  Step 7: Swap ${supplySymbol} → USDC`);
+    // Step 4: Swap collateral → USDC (pass tx directly, NOT tx.txBlock)
+    console.log(`  Step 4: Swap ${supplySymbol} → USDC`);
     const swappedUsdc = await metaAg.swap(
       {
         quote: bestQuote,
         signer: userAddress,
         coinIn: withdrawnCoin,
-        tx: tx.txBlock,
+        tx: tx, // Plain Transaction, not tx.txBlock!
       },
-      100, // slippage
+      100, // 1% slippage
     );
 
-    // Step 8: Merge swapped USDC with remaining loan coin and repay flash loan
-    console.log(`  Step 8: Repay flash loan`);
-    tx.mergeCoins(swappedUsdc, [loanCoin]);
-    const [flashRepayment] = tx.splitCoins(swappedUsdc, [
-      Number(totalRepayment),
+    // Step 5: Repay flash loan
+    console.log(`  Step 5: Repay flash loan`);
+    const [flashRepayment] = tx.splitCoins(swappedUsdc as any, [
+      totalRepayment,
     ]);
-    await tx.repayFlashLoan(flashRepayment, receipt, "usdc");
+    flashLoanClient.repayFlashLoan(tx, flashRepayment as any, receipt, "usdc");
 
-    // Step 9: Transfer remaining assets to user
-    console.log(`  Step 9: Transfer remaining assets to user`);
-    tx.transferObjects([swappedUsdc], userAddress);
+    // Step 6: Transfer remaining to user
+    console.log(`  Step 6: Transfer remaining assets to user`);
+    tx.transferObjects([swappedUsdc as any], userAddress);
 
     // 7. Dry Run
     console.log(`\n${"─".repeat(60)}`);
     console.log(`🧪 Running dry-run...`);
-
     console.log("─".repeat(60));
 
     const dryRunResult = await suiClient.dryRunTransactionBlock({
-      transactionBlock: await tx.txBlock.build({ client: suiClient }),
+      transactionBlock: await tx.build({ client: suiClient }),
     });
 
     if (dryRunResult.effects.status.status === "success") {
@@ -350,10 +427,11 @@ async function main() {
         `   Gas estimate: ${dryRunResult.effects.gasUsed.computationCost} MIST`,
       );
 
+      const estimatedProfit = expectedUsdcOut - totalRepayment;
       console.log(`\n📊 Expected Result:`);
       console.log("─".repeat(60));
       console.log(`  Position would be closed successfully`);
-      console.log(`  Net assets would be returned to your wallet`);
+      console.log(`  Estimated USDC profit: ~${formatUnits(estimatedProfit, 6)} USDC`);
       console.log("─".repeat(60));
     } else {
       console.log(`❌ DRY RUN FAILED:`);

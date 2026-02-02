@@ -46,9 +46,13 @@
     "script:scallop-leverage-exec": "ts-node scripts/scallop/scallop_leverage_exec.ts",
     "script:scallop-deleverage": "ts-node scripts/scallop/scallop_deleverage_dryrun.ts",
     "script:scallop-deleverage-exec": "ts-node scripts/scallop/scallop_deleverage_exec.ts",
+    "script:scallop-unlock": "ts-node scripts/scallop/scallop_unlock_obligation.ts",
     "script:scallop-create-obligation": "ts-node scripts/scallop/scallop_create_obligation.ts",
     "script:scallop-deposit": "ts-node scripts/scallop/scallop_deposit.ts",
-    "script:scallop-borrow": "ts-node scripts/scallop/scallop_borrow.ts"
+    "script:scallop-borrow": "ts-node scripts/scallop/scallop_borrow.ts",
+    "script:scallop-collaterals": "ts-node scripts/scallop/scallop_query_collaterals.ts",
+    "script:compare-btc": "ts-node scripts/compare_btc_collaterals.ts",
+    "script:merge-sui": "ts-node scripts/merge_sui_coins.ts"
   },
   "keywords": [],
   "author": "",
@@ -63,7 +67,7 @@
     "@suilend/sdk": "^1.1.99"
   },
   "dependencies": {
-    "@scallop-io/sui-scallop-sdk": "^2.3.13",
+    "@scallop-io/sui-scallop-sdk": "^2.3.14-rc.1",
     "@suilend/sui-fe": "^0.3.50",
     "bignumber.js": "^9.3.1"
   },

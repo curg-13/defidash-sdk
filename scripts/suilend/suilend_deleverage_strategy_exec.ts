@@ -11,7 +11,8 @@ import {
 } from "@suilend/sdk";
 import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
 import { ScallopFlashLoanClient } from "../../src/lib/scallop";
-import { getReserveByCoinType, COIN_TYPES } from "../../src/lib/suilend/const";
+import { getReserveByCoinType } from "../../src/lib/suilend/const";
+import { COIN_TYPES } from "../../src/types/constants";
 
 /**
  * Suilend Deleverage Strategy - Close leveraged position (Execute)
@@ -241,7 +242,8 @@ async function main() {
     console.log(`  Flash Fee:  ${formatUnits(flashLoanFee, 6)} USDC`);
 
     // 4. Calculate optimal swap amount using reverse calculation
-    const withdrawAmountForQuote = (supplyAmount * BigInt(999)) / BigInt(1000);
+    // Withdraw 100% of collateral (no dust left behind)
+    const withdrawAmountForQuote = supplyAmount;
     console.log(`\n🔍 Calculating optimal swap amount...`);
     const fullSwapQuotes = await metaAg.quote({
       amountIn: withdrawAmountForQuote.toString(),

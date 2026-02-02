@@ -26,10 +26,12 @@ import {
   COIN_TYPES,
 } from "./types";
 
+import { Scallop } from "@scallop-io/sui-scallop-sdk";
 import { SuilendAdapter } from "./protocols/suilend";
 import { NaviAdapter } from "./protocols/navi";
 import { ScallopAdapter } from "./protocols/scallop";
 import { ScallopFlashLoanClient } from "./lib/scallop";
+import { formatUnits } from "./utils";
 import {
   buildLeverageTransaction as buildLeverageTx,
   calculateLeveragePreview as calcPreview,
@@ -107,9 +109,6 @@ export class DefiDashSDK {
       this._userAddress = keypairOrAddress.getPublicKey().toSuiAddress();
     }
 
-    // Initialize flash loan client
-    this.flashLoanClient = new ScallopFlashLoanClient();
-
     // Initialize swap client
     this.swapClient = new MetaAg({
       partner: this.options.swapPartner || DEFAULT_7K_PARTNER,
@@ -127,6 +126,14 @@ export class DefiDashSDK {
     const scallop = new ScallopAdapter();
     await scallop.initialize(suiClient);
     this.protocols.set(LendingProtocol.Scallop, scallop);
+
+    // Initialize flash loan client with Scallop's addresses (always up-to-date)
+    const scallopAddresses = scallop.getAddresses();
+    this.flashLoanClient = new ScallopFlashLoanClient({
+      protocolPkg: scallopAddresses.core.protocolPkg,
+      version: scallopAddresses.core.version,
+      market: scallopAddresses.core.market,
+    });
 
     this.initialized = true;
   }
@@ -219,6 +226,12 @@ export class DefiDashSDK {
     }
 
     const protocol = this.getProtocol(params.protocol);
+
+    // Clear adapter state for new transaction (Scallop tracks unstaked obligations)
+    if (params.protocol === LendingProtocol.Scallop) {
+      (protocol as any).clearPendingState?.();
+    }
+
     const coinType = this.resolveCoinType(params.depositAsset);
     const reserve = getReserveByCoinType(coinType);
     const decimals = reserve?.decimals || 8;
@@ -277,6 +290,11 @@ export class DefiDashSDK {
 
     const protocol = this.getProtocol(params.protocol);
 
+    // Clear adapter state for new transaction (Scallop tracks unstaked obligations)
+    if (params.protocol === LendingProtocol.Scallop) {
+      (protocol as any).clearPendingState?.();
+    }
+
     // Get current position
     const position = await protocol.getPosition(this.userAddress);
     if (!position) {
@@ -318,17 +336,22 @@ export class DefiDashSDK {
       };
     }
 
+    // Scallop uses its own SDK builder for oracle updates
+    if (params.protocol === LendingProtocol.Scallop) {
+      return this.executeScallopLeverage(params);
+    }
+
     const tx = new Transaction();
     tx.setSender(this.userAddress);
-    tx.setGasBudget(50_000_000);
 
     try {
       await this.buildLeverageTransaction(tx, params);
 
       if (params.dryRun) {
-        return this.dryRun(tx);
+        return this.dryRunWithGasOptimization(tx);
       }
 
+      // execute() runs dryrun first and optimizes gas budget
       return this.execute(tx);
     } catch (error: any) {
       return {
@@ -357,15 +380,15 @@ export class DefiDashSDK {
 
     const tx = new Transaction();
     tx.setSender(this.userAddress);
-    tx.setGasBudget(50_000_000);
 
     try {
       await this.buildDeleverageTransaction(tx, params);
 
       if (params.dryRun) {
-        return this.dryRun(tx);
+        return this.dryRunWithGasOptimization(tx);
       }
 
+      // execute() runs dryrun first and optimizes gas budget
       return this.execute(tx);
     } catch (error: any) {
       return {
@@ -508,15 +531,45 @@ export class DefiDashSDK {
   // Internal Methods
   // ============================================================================
 
-  private async dryRun(tx: Transaction): Promise<StrategyResult> {
+  // Default gas budget for dryrun (0.1 SUI) - enough for complex operations like Scallop leverage
+  private static readonly DRYRUN_GAS_BUDGET = 100_000_000n;
+
+  /**
+   * Calculate actual gas from dryrun result
+   */
+  private calculateActualGas(gasUsed: {
+    computationCost: string;
+    storageCost: string;
+    storageRebate: string;
+  }): bigint {
+    const computationCost = BigInt(gasUsed.computationCost);
+    const storageCost = BigInt(gasUsed.storageCost);
+    const storageRebate = BigInt(gasUsed.storageRebate);
+    return computationCost + storageCost - storageRebate;
+  }
+
+  /**
+   * Dry run with gas optimization
+   *
+   * Uses small fixed budget for dryrun, returns actual gas estimation.
+   */
+  private async dryRunWithGasOptimization(
+    tx: Transaction,
+  ): Promise<StrategyResult> {
+    // Use small fixed budget for dryrun simulation
+    tx.setGasBudget(DefiDashSDK.DRYRUN_GAS_BUDGET);
+
     const result = await this.suiClient.dryRunTransactionBlock({
       transactionBlock: await tx.build({ client: this.suiClient }),
     });
 
     if (result.effects.status.status === "success") {
+      const actualGas = this.calculateActualGas(result.effects.gasUsed);
+      const optimizedBudget = (actualGas * 120n) / 100n; // +20% buffer
+
       return {
         success: true,
-        gasUsed: BigInt(result.effects.gasUsed.computationCost),
+        gasUsed: optimizedBudget,
       };
     }
 
@@ -526,10 +579,55 @@ export class DefiDashSDK {
     };
   }
 
+  /**
+   * Execute transaction with gas optimization
+   *
+   * Flow:
+   * 1. Dryrun with small fixed budget to get actual gas usage
+   * 2. Calculate optimized budget (actual + 20% buffer)
+   * 3. Check user has enough balance
+   * 4. Execute with optimized budget
+   *
+   * This ensures we never overpay for gas.
+   */
   private async execute(tx: Transaction): Promise<StrategyResult> {
     if (!this.keypair) {
       throw new Error("Keypair required for execution");
     }
+
+    // Step 1: Dryrun with small fixed budget
+    tx.setGasBudget(DefiDashSDK.DRYRUN_GAS_BUDGET);
+
+    const dryRunResult = await this.suiClient.dryRunTransactionBlock({
+      transactionBlock: await tx.build({ client: this.suiClient }),
+    });
+
+    if (dryRunResult.effects.status.status !== "success") {
+      return {
+        success: false,
+        error: `Dry run failed: ${dryRunResult.effects.status.error}`,
+      };
+    }
+
+    // Step 2: Calculate optimized gas budget (actual + 20% buffer)
+    const actualGas = this.calculateActualGas(dryRunResult.effects.gasUsed);
+    const optimizedBudget = (actualGas * 120n) / 100n;
+
+    // Step 3: Check if user has enough balance
+    const balance = await this.suiClient.getBalance({
+      owner: this.userAddress,
+    });
+    const userBalance = BigInt(balance.totalBalance);
+
+    if (userBalance < optimizedBudget) {
+      return {
+        success: false,
+        error: `Insufficient balance for gas. Need: ${Number(optimizedBudget) / 1e9} SUI, Have: ${Number(userBalance) / 1e9} SUI`,
+      };
+    }
+
+    // Step 4: Execute with optimized gas budget
+    tx.setGasBudget(optimizedBudget);
 
     const result = await this.suiClient.signAndExecuteTransaction({
       signer: this.keypair,
@@ -552,5 +650,271 @@ export class DefiDashSDK {
       txDigest: result.digest,
       error: result.effects?.status.error || "Execution failed",
     };
+  }
+
+  // ============================================================================
+  // Scallop-Specific Methods (uses Scallop SDK builder for oracle updates)
+  // ============================================================================
+
+  /**
+   * Execute Scallop leverage using native Scallop SDK builder
+   *
+   * Scallop requires oracle price updates via their SDK's updateAssetPricesQuick.
+   * This method uses the Scallop SDK builder internally.
+   */
+  private async executeScallopLeverage(
+    params: LeverageParams,
+  ): Promise<StrategyResult> {
+    if (!this.keypair) {
+      return { success: false, error: "Keypair required" };
+    }
+
+    try {
+      // Resolve coin type and amounts
+      const coinType = this.resolveCoinType(params.depositAsset);
+      const reserve = getReserveByCoinType(coinType);
+      const decimals = reserve?.decimals || 9;
+      const symbol = coinType.split("::").pop()?.toUpperCase() || "SUI";
+      const isSui = coinType.endsWith("::sui::SUI");
+
+      // Get coin name for Scallop (e.g., "sui", "usdc")
+      const coinName = this.getScallopCoinName(coinType);
+
+      // Calculate deposit amount
+      let depositAmountStr: string;
+      if (params.depositValueUsd) {
+        const price = await getTokenPrice(coinType);
+        depositAmountStr = (params.depositValueUsd / price).toFixed(decimals);
+      } else {
+        depositAmountStr = params.depositAmount!;
+      }
+      const depositAmountRaw = parseUnits(depositAmountStr, decimals);
+      const depositAmountHuman = parseFloat(depositAmountStr);
+
+      // Calculate flash loan amount
+      const depositPrice = await getTokenPrice(coinType);
+      const initialEquityUsd = depositAmountHuman * depositPrice;
+      const flashLoanUsd = initialEquityUsd * (params.multiplier - 1);
+      const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6 * 1.02));
+
+      const flashLoanFee = ScallopFlashLoanClient.calculateFee(flashLoanUsdc);
+      const repaymentAmount = flashLoanUsdc + flashLoanFee;
+      const borrowFeeBuffer = 1.003;
+      const borrowAmount = BigInt(
+        Math.ceil(Number(repaymentAmount) * borrowFeeBuffer),
+      );
+
+      // Initialize Scallop SDK with secret key
+      // Scallop SDK requires the original secret key string (not extracted from keypair)
+      if (!this.options.secretKey) {
+        return {
+          success: false,
+          error: "Scallop operations require secretKey in SDK options. Pass { secretKey: 'suiprivkey...' } to DefiDashSDK constructor.",
+        };
+      }
+
+      const scallop = new Scallop({
+        secretKey: this.options.secretKey,
+        networkType: "mainnet",
+      });
+      await scallop.init();
+
+      const builder = await scallop.createScallopBuilder();
+      const client = await scallop.createScallopClient();
+      const tx = builder.createTxBlock();
+      tx.setSender(this.userAddress);
+
+      // Check for existing obligation
+      const existingObligations = await client.getObligations();
+      const hasExistingObligation = existingObligations.length > 0;
+      let existingObligationId: string | null = null;
+      let existingObligationKeyId: string | null = null;
+      let isCurrentlyLocked = false;
+
+      if (hasExistingObligation) {
+        existingObligationId = existingObligations[0].id;
+        existingObligationKeyId = existingObligations[0].keyId;
+        isCurrentlyLocked = existingObligations[0].locked;
+      }
+
+      // Get swap quote
+      const swapQuotes = await this.swapClient.quote({
+        amountIn: flashLoanUsdc.toString(),
+        coinTypeIn: COIN_TYPES.USDC,
+        coinTypeOut: coinType,
+      });
+
+      if (swapQuotes.length === 0) {
+        return { success: false, error: `No swap quotes for USDC → ${symbol}` };
+      }
+
+      const bestQuote = swapQuotes.sort(
+        (a, b) => Number(b.amountOut) - Number(a.amountOut),
+      )[0];
+
+      // Build transaction using Scallop SDK
+      // Step 1: Flash loan USDC
+      const [loanCoin, receipt] = await tx.borrowFlashLoan(
+        Number(flashLoanUsdc),
+        "usdc",
+      );
+
+      // Step 2: Swap USDC → deposit asset
+      const swappedAsset = await this.swapClient.swap(
+        {
+          quote: bestQuote,
+          signer: this.userAddress,
+          coinIn: loanCoin,
+          tx: tx.txBlock,
+        },
+        100,
+      );
+
+      // Step 3: Prepare deposit coin
+      let depositCoin: any;
+      if (isSui) {
+        const [userDeposit] = tx.splitSUIFromGas([Number(depositAmountRaw)]);
+        tx.mergeCoins(userDeposit, [swappedAsset]);
+        depositCoin = userDeposit;
+      } else {
+        const userCoins = await this.suiClient.getCoins({
+          owner: this.userAddress,
+          coinType,
+        });
+
+        if (userCoins.data.length === 0) {
+          return { success: false, error: `No ${symbol} coins in wallet` };
+        }
+
+        const primaryCoin = tx.txBlock.object(userCoins.data[0].coinObjectId);
+        if (userCoins.data.length > 1) {
+          const otherCoins = userCoins.data
+            .slice(1)
+            .map((c) => tx.txBlock.object(c.coinObjectId));
+          tx.mergeCoins(primaryCoin, otherCoins);
+        }
+
+        const [userContribution] = tx.splitCoins(primaryCoin, [
+          Number(depositAmountRaw),
+        ]);
+        tx.mergeCoins(userContribution, [swappedAsset]);
+        depositCoin = userContribution;
+      }
+
+      // Step 4: Handle obligation
+      let obligation: any;
+      let obligationKey: any;
+      let obligationHotPotato: any;
+      let isNewObligation = false;
+
+      if (hasExistingObligation && existingObligationId && existingObligationKeyId) {
+        obligation = tx.txBlock.object(existingObligationId);
+        obligationKey = tx.txBlock.object(existingObligationKeyId);
+
+        if (isCurrentlyLocked) {
+          tx.unstakeObligation(obligation, obligationKey);
+        }
+
+        tx.addCollateral(obligation, depositCoin, coinName);
+      } else {
+        [obligation, obligationKey, obligationHotPotato] = tx.openObligation();
+        tx.addCollateral(obligation, depositCoin, coinName);
+        isNewObligation = true;
+      }
+
+      // Step 5: Update oracles (critical for Scallop!)
+      await tx.updateAssetPricesQuick([coinName, "usdc"]);
+
+      // Step 6: Borrow USDC
+      const borrowedUsdc = tx.borrow(
+        obligation,
+        obligationKey,
+        Number(borrowAmount),
+        "usdc",
+      );
+
+      // Step 7: Repay flash loan
+      await tx.repayFlashLoan(borrowedUsdc, receipt, "usdc");
+
+      // Step 8: Finalize
+      if (isNewObligation) {
+        tx.returnObligation(obligation, obligationHotPotato);
+        tx.stakeObligation(obligation, obligationKey);
+        tx.transferObjects([obligationKey], this.userAddress);
+      } else {
+        tx.stakeObligation(obligation, obligationKey);
+      }
+
+      // Execute
+      if (params.dryRun) {
+        tx.txBlock.setGasBudget(DefiDashSDK.DRYRUN_GAS_BUDGET);
+        const dryRunResult = await this.suiClient.dryRunTransactionBlock({
+          transactionBlock: await tx.txBlock.build({ client: this.suiClient }),
+        });
+
+        if (dryRunResult.effects.status.status === "success") {
+          const actualGas = this.calculateActualGas(dryRunResult.effects.gasUsed);
+          return { success: true, gasUsed: (actualGas * 120n) / 100n };
+        }
+        return {
+          success: false,
+          error: dryRunResult.effects.status.error || "Dry run failed",
+        };
+      }
+
+      // For real execution, do dryrun first to optimize gas
+      tx.txBlock.setGasBudget(DefiDashSDK.DRYRUN_GAS_BUDGET);
+      const dryRunResult = await this.suiClient.dryRunTransactionBlock({
+        transactionBlock: await tx.txBlock.build({ client: this.suiClient }),
+      });
+
+      if (dryRunResult.effects.status.status !== "success") {
+        return {
+          success: false,
+          error: `Dry run failed: ${dryRunResult.effects.status.error}`,
+        };
+      }
+
+      const actualGas = this.calculateActualGas(dryRunResult.effects.gasUsed);
+      const optimizedBudget = (actualGas * 120n) / 100n;
+      tx.txBlock.setGasBudget(optimizedBudget);
+
+      const result = await builder.signAndSendTxBlock(tx);
+
+      // Fetch transaction details to get actual gas used
+      const txDetails = await this.suiClient.waitForTransaction({
+        digest: result.digest,
+        options: { showEffects: true },
+      });
+
+      const gasUsed = txDetails.effects?.gasUsed
+        ? BigInt(txDetails.effects.gasUsed.computationCost)
+        : actualGas;
+
+      return {
+        success: true,
+        txDigest: result.digest,
+        gasUsed,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message || String(error),
+      };
+    }
+  }
+
+  /**
+   * Get Scallop coin name from coin type
+   */
+  private getScallopCoinName(coinType: string): string {
+    const normalized = normalizeCoinType(coinType);
+    const COIN_NAME_MAP: Record<string, string> = {
+      "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI": "sui",
+      "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC": "usdc",
+      "0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN": "wusdc",
+      "0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN": "wusdt",
+    };
+    return COIN_NAME_MAP[normalized] || normalized.split("::").pop()?.toLowerCase() || "sui";
   }
 }

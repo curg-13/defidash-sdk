@@ -11,7 +11,8 @@ import {
 } from "@suilend/sdk";
 import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
 import { ScallopFlashLoanClient } from "../../src/lib/scallop";
-import { getReserveByCoinType, COIN_TYPES } from "../../src/lib/suilend/const";
+import { getReserveByCoinType } from "../../src/lib/suilend/const";
+import { COIN_TYPES } from "../../src/types/constants";
 
 const SUI_FULLNODE_URL =
   process.env.SUI_FULLNODE_URL || getFullnodeUrl("mainnet");
@@ -88,7 +89,7 @@ async function main() {
   const DEPOSIT_COIN_TYPE =
     process.env.LEVERAGE_DEPOSIT_COIN_TYPE || COIN_TYPES.LBTC;
   const DEPOSIT_VALUE_USD = process.env.LEVERAGE_DEPOSIT_VALUE; // e.g., "1" for $1
-  let DEPOSIT_AMOUNT = process.env.LEVERAGE_DEPOSIT_AMOUNT || "1101";
+  let DEPOSIT_AMOUNT_RAW = process.env.LEVERAGE_DEPOSIT_AMOUNT || "1101";
   const MULTIPLIER = parseFloat(process.env.LEVERAGE_MULTIPLIER || "1.5");
 
   const normalizedDepositCoin = normalizeCoinType(DEPOSIT_COIN_TYPE);
@@ -99,6 +100,8 @@ async function main() {
   // 3. Calculate values using getTokenPrice
   const depositPrice = await getTokenPrice(normalizedDepositCoin);
 
+  // Convert DEPOSIT_AMOUNT to raw units if it looks like human-readable (contains decimal or is small)
+  let DEPOSIT_AMOUNT: string;
   if (DEPOSIT_VALUE_USD) {
     console.log(`\n💲 Target Deposit Value: $${DEPOSIT_VALUE_USD}`);
     // Amount = Value / Price
@@ -108,6 +111,14 @@ async function main() {
     const targetAmountRaw = Math.floor(targetAmount * Math.pow(10, decimals));
     DEPOSIT_AMOUNT = targetAmountRaw.toString();
     console.log(`   Calculated Amount: ${DEPOSIT_AMOUNT} (raw) for ${symbol}`);
+  } else if (DEPOSIT_AMOUNT_RAW.includes(".") || parseFloat(DEPOSIT_AMOUNT_RAW) < 1000) {
+    // Human-readable amount (e.g., "0.5" SUI) - convert to raw units
+    const humanAmount = parseFloat(DEPOSIT_AMOUNT_RAW);
+    DEPOSIT_AMOUNT = Math.floor(humanAmount * Math.pow(10, decimals)).toString();
+    console.log(`\n💰 Deposit Amount: ${humanAmount} ${symbol} → ${DEPOSIT_AMOUNT} raw units`);
+  } else {
+    // Already in raw units
+    DEPOSIT_AMOUNT = DEPOSIT_AMOUNT_RAW;
   }
 
   const depositAmountHuman = Number(DEPOSIT_AMOUNT) / Math.pow(10, decimals);
