@@ -5,6 +5,7 @@
  */
 
 import { PositionInfo, LeveragePreview, StrategyResult } from "../types";
+import { fromRawUnits } from "./calculations";
 
 const DIVIDER = "─".repeat(55);
 
@@ -16,7 +17,8 @@ export function formatAmount(
   amount: bigint | number,
   decimals: number,
 ): string {
-  const num = Number(amount) / Math.pow(10, decimals);
+  const rawAmount = typeof amount === "number" ? BigInt(amount) : amount;
+  const num = fromRawUnits(rawAmount, decimals);
   return num.toFixed(Math.min(decimals, 8)); // Show up to 8 decimals
 }
 

@@ -27,18 +27,33 @@ import {
 } from "./types";
 
 import { Scallop } from "@scallop-io/sui-scallop-sdk";
-import { SuilendAdapter } from "./protocols/suilend";
-import { NaviAdapter } from "./protocols/navi";
-import { ScallopAdapter } from "./protocols/scallop";
-import { ScallopFlashLoanClient } from "./lib/scallop";
-import { formatUnits } from "./utils";
+import { SuilendAdapter } from "./protocols/suilend/adapter";
+import { NaviAdapter } from "./protocols/navi/adapter";
+import { ScallopAdapter } from "./protocols/scallop/adapter";
+import { ScallopFlashLoanClient } from "./protocols/scallop/flash-loan";
+import { normalizeCoinType, parseUnits } from "./utils";
+import {
+  DRYRUN_GAS_BUDGET,
+  calculateActualGas,
+  calculateOptimizedBudget,
+} from "./utils/gas";
+import {
+  SDKNotInitializedError,
+  UnsupportedProtocolError,
+  UnknownAssetError,
+  PositionNotFoundError,
+  NoDebtError,
+  InvalidParameterError,
+  InsufficientBalanceError,
+  DryRunFailedError,
+  KeypairRequiredError,
+} from "./utils/errors";
 import {
   buildLeverageTransaction as buildLeverageTx,
   calculateLeveragePreview as calcPreview,
 } from "./strategies/leverage";
 import { buildDeleverageTransaction as buildDeleverageTx } from "./strategies/deleverage";
-import { normalizeCoinType, parseUnits } from "./utils";
-import { getReserveByCoinType } from "./lib/suilend/const";
+import { getReserveByCoinType } from "./protocols/suilend/constants";
 
 /**
  * DeFi Dash SDK - Main entry point
@@ -140,21 +155,21 @@ export class DefiDashSDK {
 
   private ensureInitialized() {
     if (!this.initialized) {
-      throw new Error("SDK not initialized. Call initialize() first.");
+      throw new SDKNotInitializedError();
     }
   }
 
   private getProtocol(protocol: LendingProtocol): ILendingProtocol {
     const adapter = this.protocols.get(protocol);
     if (!adapter) {
-      throw new Error(`Protocol ${protocol} not supported`);
+      throw new UnsupportedProtocolError(protocol);
     }
     return adapter;
   }
 
   private get userAddress(): string {
     if (!this._userAddress) {
-      throw new Error("User address not set. Call initialize() first.");
+      throw new SDKNotInitializedError();
     }
     return this._userAddress;
   }
@@ -170,12 +185,12 @@ export class DefiDashSDK {
 
     // Look up by symbol
     const upperSymbol = asset.toUpperCase();
-    const coinType = (COIN_TYPES as any)[upperSymbol];
+    const coinType = COIN_TYPES[upperSymbol as keyof typeof COIN_TYPES];
     if (coinType) {
       return normalizeCoinType(coinType);
     }
 
-    throw new Error(`Unknown asset symbol: ${asset}`);
+    throw new UnknownAssetError(asset);
   }
 
   // ============================================================================
@@ -215,12 +230,12 @@ export class DefiDashSDK {
 
     // Validate that exactly one of depositAmount or depositValueUsd is provided
     if (!params.depositAmount && !params.depositValueUsd) {
-      throw new Error(
+      throw new InvalidParameterError(
         "Either depositAmount or depositValueUsd must be provided",
       );
     }
     if (params.depositAmount && params.depositValueUsd) {
-      throw new Error(
+      throw new InvalidParameterError(
         "Cannot provide both depositAmount and depositValueUsd. Choose one.",
       );
     }
@@ -229,7 +244,7 @@ export class DefiDashSDK {
 
     // Clear adapter state for new transaction (Scallop tracks unstaked obligations)
     if (params.protocol === LendingProtocol.Scallop) {
-      (protocol as any).clearPendingState?.();
+      protocol.clearPendingState?.();
     }
 
     const coinType = this.resolveCoinType(params.depositAsset);
@@ -292,17 +307,17 @@ export class DefiDashSDK {
 
     // Clear adapter state for new transaction (Scallop tracks unstaked obligations)
     if (params.protocol === LendingProtocol.Scallop) {
-      (protocol as any).clearPendingState?.();
+      protocol.clearPendingState?.();
     }
 
     // Get current position
     const position = await protocol.getPosition(this.userAddress);
     if (!position) {
-      throw new Error("No position found to deleverage");
+      throw new PositionNotFoundError(params.protocol);
     }
 
     if (position.debt.amount === 0n) {
-      throw new Error("No debt to repay. Use withdraw instead.");
+      throw new NoDebtError();
     }
 
     await buildDeleverageTx(tx, {
@@ -434,7 +449,7 @@ export class DefiDashSDK {
             return await adapter.getAccountPortfolio(address);
           }
         } catch (e) {
-          console.error(`Failed to fetch portfolio for ${p}`, e);
+          // Silently skip failed protocol fetches
         }
         // Return resilient default
         return {
@@ -467,12 +482,12 @@ export class DefiDashSDK {
   }): Promise<LeveragePreview> {
     // Validate that exactly one is provided
     if (!params.depositAmount && !params.depositValueUsd) {
-      throw new Error(
+      throw new InvalidParameterError(
         "Either depositAmount or depositValueUsd must be provided",
       );
     }
     if (params.depositAmount && params.depositValueUsd) {
-      throw new Error(
+      throw new InvalidParameterError(
         "Cannot provide both depositAmount and depositValueUsd. Choose one.",
       );
     }
@@ -531,23 +546,6 @@ export class DefiDashSDK {
   // Internal Methods
   // ============================================================================
 
-  // Default gas budget for dryrun (0.1 SUI) - enough for complex operations like Scallop leverage
-  private static readonly DRYRUN_GAS_BUDGET = 100_000_000n;
-
-  /**
-   * Calculate actual gas from dryrun result
-   */
-  private calculateActualGas(gasUsed: {
-    computationCost: string;
-    storageCost: string;
-    storageRebate: string;
-  }): bigint {
-    const computationCost = BigInt(gasUsed.computationCost);
-    const storageCost = BigInt(gasUsed.storageCost);
-    const storageRebate = BigInt(gasUsed.storageRebate);
-    return computationCost + storageCost - storageRebate;
-  }
-
   /**
    * Dry run with gas optimization
    *
@@ -557,15 +555,15 @@ export class DefiDashSDK {
     tx: Transaction,
   ): Promise<StrategyResult> {
     // Use small fixed budget for dryrun simulation
-    tx.setGasBudget(DefiDashSDK.DRYRUN_GAS_BUDGET);
+    tx.setGasBudget(DRYRUN_GAS_BUDGET);
 
     const result = await this.suiClient.dryRunTransactionBlock({
       transactionBlock: await tx.build({ client: this.suiClient }),
     });
 
     if (result.effects.status.status === "success") {
-      const actualGas = this.calculateActualGas(result.effects.gasUsed);
-      const optimizedBudget = (actualGas * 120n) / 100n; // +20% buffer
+      const actualGas = calculateActualGas(result.effects.gasUsed);
+      const optimizedBudget = calculateOptimizedBudget(actualGas);
 
       return {
         success: true,
@@ -592,11 +590,11 @@ export class DefiDashSDK {
    */
   private async execute(tx: Transaction): Promise<StrategyResult> {
     if (!this.keypair) {
-      throw new Error("Keypair required for execution");
+      throw new KeypairRequiredError();
     }
 
     // Step 1: Dryrun with small fixed budget
-    tx.setGasBudget(DefiDashSDK.DRYRUN_GAS_BUDGET);
+    tx.setGasBudget(DRYRUN_GAS_BUDGET);
 
     const dryRunResult = await this.suiClient.dryRunTransactionBlock({
       transactionBlock: await tx.build({ client: this.suiClient }),
@@ -610,8 +608,8 @@ export class DefiDashSDK {
     }
 
     // Step 2: Calculate optimized gas budget (actual + 20% buffer)
-    const actualGas = this.calculateActualGas(dryRunResult.effects.gasUsed);
-    const optimizedBudget = (actualGas * 120n) / 100n;
+    const actualGas = calculateActualGas(dryRunResult.effects.gasUsed);
+    const optimizedBudget = calculateOptimizedBudget(actualGas);
 
     // Step 3: Check if user has enough balance
     const balance = await this.suiClient.getBalance({
@@ -847,14 +845,15 @@ export class DefiDashSDK {
 
       // Execute
       if (params.dryRun) {
-        tx.txBlock.setGasBudget(DefiDashSDK.DRYRUN_GAS_BUDGET);
+        tx.txBlock.setGasBudget(DRYRUN_GAS_BUDGET);
         const dryRunResult = await this.suiClient.dryRunTransactionBlock({
           transactionBlock: await tx.txBlock.build({ client: this.suiClient }),
         });
 
         if (dryRunResult.effects.status.status === "success") {
-          const actualGas = this.calculateActualGas(dryRunResult.effects.gasUsed);
-          return { success: true, gasUsed: (actualGas * 120n) / 100n };
+          const actualGas = calculateActualGas(dryRunResult.effects.gasUsed);
+          const optimizedBudget = calculateOptimizedBudget(actualGas);
+          return { success: true, gasUsed: optimizedBudget };
         }
         return {
           success: false,
@@ -863,7 +862,7 @@ export class DefiDashSDK {
       }
 
       // For real execution, do dryrun first to optimize gas
-      tx.txBlock.setGasBudget(DefiDashSDK.DRYRUN_GAS_BUDGET);
+      tx.txBlock.setGasBudget(DRYRUN_GAS_BUDGET);
       const dryRunResult = await this.suiClient.dryRunTransactionBlock({
         transactionBlock: await tx.txBlock.build({ client: this.suiClient }),
       });
@@ -875,8 +874,8 @@ export class DefiDashSDK {
         };
       }
 
-      const actualGas = this.calculateActualGas(dryRunResult.effects.gasUsed);
-      const optimizedBudget = (actualGas * 120n) / 100n;
+      const actualGas = calculateActualGas(dryRunResult.effects.gasUsed);
+      const optimizedBudget = calculateOptimizedBudget(actualGas);
       tx.txBlock.setGasBudget(optimizedBudget);
 
       const result = await builder.signAndSendTxBlock(tx);

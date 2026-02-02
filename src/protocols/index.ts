@@ -2,6 +2,6 @@
  * DeFi Dash SDK - Protocol Adapters
  */
 
-export { SuilendAdapter } from "./suilend";
-export { NaviAdapter } from "./navi";
-export { ScallopAdapter } from "./scallop";
+export { SuilendAdapter } from "./suilend/adapter";
+export { NaviAdapter } from "./navi/adapter";
+export { ScallopAdapter } from "./scallop/adapter";

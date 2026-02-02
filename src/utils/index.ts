@@ -9,3 +9,5 @@ export * from "./format";
 export * from "./coin";
 export * from "./logger";
 export * from "./calculations";
+export * from "./gas";
+export * from "./errors";

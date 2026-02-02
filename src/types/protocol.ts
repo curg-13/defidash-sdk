@@ -121,4 +121,11 @@ export interface ILendingProtocol {
    * @param address - User address
    */
   getAccountPortfolio(address: string): Promise<AccountPortfolio>;
+
+  /**
+   * Clear any pending state tracked by the adapter
+   * Optional method for protocols that track state between transactions
+   * (e.g., Scallop tracks unstaked obligations)
+   */
+  clearPendingState?(): void;
 }
