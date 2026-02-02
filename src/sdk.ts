@@ -38,6 +38,17 @@ import {
   calculateOptimizedBudget,
 } from "./utils/gas";
 import {
+  SDKNotInitializedError,
+  UnsupportedProtocolError,
+  UnknownAssetError,
+  PositionNotFoundError,
+  NoDebtError,
+  InvalidParameterError,
+  InsufficientBalanceError,
+  DryRunFailedError,
+  KeypairRequiredError,
+} from "./utils/errors";
+import {
   buildLeverageTransaction as buildLeverageTx,
   calculateLeveragePreview as calcPreview,
 } from "./strategies/leverage";
@@ -144,21 +155,21 @@ export class DefiDashSDK {
 
   private ensureInitialized() {
     if (!this.initialized) {
-      throw new Error("SDK not initialized. Call initialize() first.");
+      throw new SDKNotInitializedError();
     }
   }
 
   private getProtocol(protocol: LendingProtocol): ILendingProtocol {
     const adapter = this.protocols.get(protocol);
     if (!adapter) {
-      throw new Error(`Protocol ${protocol} not supported`);
+      throw new UnsupportedProtocolError(protocol);
     }
     return adapter;
   }
 
   private get userAddress(): string {
     if (!this._userAddress) {
-      throw new Error("User address not set. Call initialize() first.");
+      throw new SDKNotInitializedError();
     }
     return this._userAddress;
   }
@@ -179,7 +190,7 @@ export class DefiDashSDK {
       return normalizeCoinType(coinType);
     }
 
-    throw new Error(`Unknown asset symbol: ${asset}`);
+    throw new UnknownAssetError(asset);
   }
 
   // ============================================================================
@@ -219,12 +230,12 @@ export class DefiDashSDK {
 
     // Validate that exactly one of depositAmount or depositValueUsd is provided
     if (!params.depositAmount && !params.depositValueUsd) {
-      throw new Error(
+      throw new InvalidParameterError(
         "Either depositAmount or depositValueUsd must be provided",
       );
     }
     if (params.depositAmount && params.depositValueUsd) {
-      throw new Error(
+      throw new InvalidParameterError(
         "Cannot provide both depositAmount and depositValueUsd. Choose one.",
       );
     }
@@ -302,11 +313,11 @@ export class DefiDashSDK {
     // Get current position
     const position = await protocol.getPosition(this.userAddress);
     if (!position) {
-      throw new Error("No position found to deleverage");
+      throw new PositionNotFoundError(params.protocol);
     }
 
     if (position.debt.amount === 0n) {
-      throw new Error("No debt to repay. Use withdraw instead.");
+      throw new NoDebtError();
     }
 
     await buildDeleverageTx(tx, {
@@ -471,12 +482,12 @@ export class DefiDashSDK {
   }): Promise<LeveragePreview> {
     // Validate that exactly one is provided
     if (!params.depositAmount && !params.depositValueUsd) {
-      throw new Error(
+      throw new InvalidParameterError(
         "Either depositAmount or depositValueUsd must be provided",
       );
     }
     if (params.depositAmount && params.depositValueUsd) {
-      throw new Error(
+      throw new InvalidParameterError(
         "Cannot provide both depositAmount and depositValueUsd. Choose one.",
       );
     }
@@ -579,7 +590,7 @@ export class DefiDashSDK {
    */
   private async execute(tx: Transaction): Promise<StrategyResult> {
     if (!this.keypair) {
-      throw new Error("Keypair required for execution");
+      throw new KeypairRequiredError();
     }
 
     // Step 1: Dryrun with small fixed budget
