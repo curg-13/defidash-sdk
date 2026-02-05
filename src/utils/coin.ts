@@ -10,9 +10,9 @@ import { normalizeStructTag } from '@mysten/sui/utils';
  * @example
  * normalizeCoinType("0x2::sui::SUI")
  * // "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI"
+ *
+ * @see scripts/tests/test_normalize_coin_type.ts for test cases
  */
-// Check ❌ : we need to make a test case for this utility function
-// first I want to support SUI, XBTC, LBTC coins
 export function normalizeCoinType(coinType: string): string {
   const parts = coinType.split('::');
   if (parts.length !== 3) return coinType;

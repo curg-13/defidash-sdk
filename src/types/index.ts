@@ -37,6 +37,9 @@ export {
   SUI_COIN_TYPE,
   DEFAULT_7K_PARTNER,
   COIN_TYPES,
+  COIN_DECIMALS,
+  UNSUPPORTED_COIN_TYPES,
+  SUPPORTED_COIN_TYPES,
 } from "./constants";
 
 // Protocol interface and types

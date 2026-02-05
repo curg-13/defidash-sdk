@@ -5,20 +5,20 @@
  * Does not modify .env file.
  */
 
-import * as dotenv from 'dotenv';
-dotenv.config({ path: '.env' });
+import * as dotenv from "dotenv";
+dotenv.config({ path: ".env" });
 
-import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
-import { DefiDashSDK, LendingProtocol } from '../src';
+import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { DefiDashSDK, LendingProtocol } from "../src";
 
 const SUI_FULLNODE_URL =
-  process.env.SUI_FULLNODE_URL || getFullnodeUrl('mainnet');
+  process.env.SUI_FULLNODE_URL || getFullnodeUrl("mainnet");
 
 const protocols: [LendingProtocol, string][] = [
-  // [LendingProtocol.Suilend, 'Suilend'],
-  // [LendingProtocol.Navi, 'Navi'],
-  [LendingProtocol.Scallop, 'Scallop'],
+  [LendingProtocol.Suilend, "Suilend"],
+  [LendingProtocol.Navi, "Navi"],
+  [LendingProtocol.Scallop, "Scallop"],
 ];
 
 interface TestResult {
@@ -39,7 +39,7 @@ async function testLeverage(
   try {
     const result = await sdk.leverage({
       protocol,
-      depositAsset: 'SUI',
+      depositAsset: "SUI",
       depositValueUsd: 1.0,
       multiplier: 2.0,
       dryRun,
@@ -48,7 +48,7 @@ async function testLeverage(
     if (result.success) {
       return {
         protocol: protocolName,
-        action: 'leverage',
+        action: "leverage",
         success: true,
         gasUsed: result.gasUsed,
         txDigest: result.txDigest,
@@ -56,7 +56,7 @@ async function testLeverage(
     } else {
       return {
         protocol: protocolName,
-        action: 'leverage',
+        action: "leverage",
         success: false,
         error: result.error,
       };
@@ -64,7 +64,7 @@ async function testLeverage(
   } catch (error: any) {
     return {
       protocol: protocolName,
-      action: 'leverage',
+      action: "leverage",
       success: false,
       error: error.message,
     };
@@ -83,9 +83,9 @@ async function testDeleverage(
     if (!position || position.debt.amount === 0n) {
       return {
         protocol: protocolName,
-        action: 'deleverage',
+        action: "deleverage",
         success: false,
-        error: 'No position found or no debt to repay',
+        error: "No position found or no debt to repay",
       };
     }
 
@@ -97,7 +97,7 @@ async function testDeleverage(
     if (result.success) {
       return {
         protocol: protocolName,
-        action: 'deleverage',
+        action: "deleverage",
         success: true,
         gasUsed: result.gasUsed,
         txDigest: result.txDigest,
@@ -105,7 +105,7 @@ async function testDeleverage(
     } else {
       return {
         protocol: protocolName,
-        action: 'deleverage',
+        action: "deleverage",
         success: false,
         error: result.error,
       };
@@ -113,7 +113,7 @@ async function testDeleverage(
   } catch (error: any) {
     return {
       protocol: protocolName,
-      action: 'deleverage',
+      action: "deleverage",
       success: false,
       error: error.message,
     };
@@ -121,25 +121,25 @@ async function testDeleverage(
 }
 
 async function main() {
-  console.log('═══════════════════════════════════════════════════════');
-  console.log('  🧪 Testing All Protocols - Leverage & Deleverage');
-  console.log('═══════════════════════════════════════════════════════\n');
+  console.log("═══════════════════════════════════════════════════════");
+  console.log("  🧪 Testing All Protocols - Leverage & Deleverage");
+  console.log("═══════════════════════════════════════════════════════\n");
 
   // Parse command line args
   const args = process.argv.slice(2);
-  const dryRun = !args.includes('--execute');
-  const testLeverageOnly = args.includes('--leverage-only');
-  const testDeleverageOnly = args.includes('--deleverage-only');
+  const dryRun = !args.includes("--execute");
+  const testLeverageOnly = args.includes("--leverage-only");
+  const testDeleverageOnly = args.includes("--deleverage-only");
 
-  console.log(`Mode: ${dryRun ? '🧪 DRY RUN' : '⚠️  EXECUTION'}`);
+  console.log(`Mode: ${dryRun ? "🧪 DRY RUN" : "⚠️  EXECUTION"}`);
   console.log(
-    `Tests: ${testLeverageOnly ? 'Leverage only' : testDeleverageOnly ? 'Deleverage only' : 'Full cycle'}\n`,
+    `Tests: ${testLeverageOnly ? "Leverage only" : testDeleverageOnly ? "Deleverage only" : "Full cycle"}\n`,
   );
 
   // Setup
   const secretKey = process.env.SECRET_KEY;
-  if (!secretKey || secretKey === 'YOUR_SECRET_KEY_HERE') {
-    console.error('❌ Error: SECRET_KEY not found in .env file.');
+  if (!secretKey || secretKey === "YOUR_SECRET_KEY_HERE") {
+    console.error("❌ Error: SECRET_KEY not found in .env file.");
     return;
   }
 
@@ -157,9 +157,9 @@ async function main() {
 
   // Test each protocol
   for (const [protocol, name] of protocols) {
-    console.log(`\n${'─'.repeat(55)}`);
+    console.log(`\n${"─".repeat(55)}`);
     console.log(`  Testing ${name}`);
-    console.log(`${'─'.repeat(55)}`);
+    console.log(`${"─".repeat(55)}`);
 
     // Test Leverage
     if (!testDeleverageOnly) {
@@ -213,9 +213,9 @@ async function main() {
   }
 
   // Summary
-  console.log('\n═══════════════════════════════════════════════════════');
-  console.log('  📊 Test Summary');
-  console.log('═══════════════════════════════════════════════════════\n');
+  console.log("\n═══════════════════════════════════════════════════════");
+  console.log("  📊 Test Summary");
+  console.log("═══════════════════════════════════════════════════════\n");
 
   const passed = results.filter((r) => r.success).length;
   const failed = results.filter((r) => !r.success).length;
@@ -226,7 +226,7 @@ async function main() {
 
   // Detailed results
   if (failed > 0) {
-    console.log('  Failed tests:');
+    console.log("  Failed tests:");
     results
       .filter((r) => !r.success)
       .forEach((r) => {
@@ -235,7 +235,7 @@ async function main() {
     console.log();
   }
 
-  console.log('═══════════════════════════════════════════════════════\n');
+  console.log("═══════════════════════════════════════════════════════\n");
 }
 
 main().catch(console.error);

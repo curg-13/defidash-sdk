@@ -8,9 +8,9 @@ import { SuiClient } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 
 /**
- * Fixed gas budget for dry runs (0.1 SUI - enough for complex operations)
+ * Fixed gas budget for dry runs (0.2 SUI - enough for complex leverage operations)
  */
-export const DRYRUN_GAS_BUDGET = 100_000_000;
+export const DRYRUN_GAS_BUDGET = 200_000_000;
 
 /**
  * Default gas buffer percentage (20%)
