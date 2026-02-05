@@ -1,4 +1,4 @@
-import { normalizeStructTag } from "@mysten/sui/utils";
+import { normalizeStructTag } from '@mysten/sui/utils';
 
 /**
  * Normalizes a Sui coin type address to ensure consistent formatting.
@@ -11,11 +11,13 @@ import { normalizeStructTag } from "@mysten/sui/utils";
  * normalizeCoinType("0x2::sui::SUI")
  * // "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI"
  */
+// Check ❌ : we need to make a test case for this utility function
+// first I want to support SUI, XBTC, LBTC coins
 export function normalizeCoinType(coinType: string): string {
-  const parts = coinType.split("::");
+  const parts = coinType.split('::');
   if (parts.length !== 3) return coinType;
-  let pkg = parts[0].replace("0x", "");
-  pkg = pkg.padStart(64, "0");
+  let pkg = parts[0].replace('0x', '');
+  pkg = pkg.padStart(64, '0');
   return `0x${pkg}::${parts[1]}::${parts[2]}`;
 }
 
@@ -27,17 +29,17 @@ export function normalizeCoinType(coinType: string): string {
  * @returns The normalized coin type with 0x prefix
  */
 export function formatCoinType(type: string): string {
-  if (!type.startsWith("0x") && !type.includes("::")) {
+  if (!type.startsWith('0x') && !type.includes('::')) {
     // Likely invalid, but let normalizeStructTag handle
   }
   try {
     const normalized = normalizeStructTag(type);
-    if (!normalized.startsWith("0x")) {
+    if (!normalized.startsWith('0x')) {
       return `0x${normalized}`;
     }
     return normalized;
   } catch (e) {
-    if (type.includes("::") && !type.startsWith("0x")) {
+    if (type.includes('::') && !type.startsWith('0x')) {
       return `0x${type}`;
     }
     return type;
