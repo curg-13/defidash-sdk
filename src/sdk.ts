@@ -776,8 +776,27 @@ export class DefiDashSDK {
       throw new KeypairRequiredError();
     }
 
-    // Step 1: Dryrun with small fixed budget
-    tx.setGasBudget(DRYRUN_GAS_BUDGET);
+    // Step 1: Check user's available gas balance first
+    const balance = await this.suiClient.getBalance({
+      owner: this.userAddress,
+    });
+    const userBalance = BigInt(balance.totalBalance);
+
+    // Step 2: Set dryrun budget (use available balance or default, whichever is lower)
+    const dryrunBudget =
+      userBalance < BigInt(DRYRUN_GAS_BUDGET)
+        ? userBalance
+        : BigInt(DRYRUN_GAS_BUDGET);
+
+    if (dryrunBudget < 10_000_000n) {
+      // Min 0.01 SUI for dryrun
+      return {
+        success: false,
+        error: `Insufficient balance for gas. Have: ${Number(userBalance) / 1e9} SUI`,
+      };
+    }
+
+    tx.setGasBudget(dryrunBudget);
 
     const dryRunResult = await this.suiClient.dryRunTransactionBlock({
       transactionBlock: await tx.build({ client: this.suiClient }),
@@ -790,16 +809,11 @@ export class DefiDashSDK {
       };
     }
 
-    // Step 2: Calculate optimized gas budget (actual + 20% buffer)
+    // Step 3: Calculate optimized gas budget (actual + 20% buffer)
     const actualGas = calculateActualGas(dryRunResult.effects.gasUsed);
     const optimizedBudget = calculateOptimizedBudget(actualGas);
 
-    // Step 3: Check if user has enough balance
-    const balance = await this.suiClient.getBalance({
-      owner: this.userAddress,
-    });
-    const userBalance = BigInt(balance.totalBalance);
-
+    // Step 4: Check if user has enough balance for actual execution
     if (userBalance < optimizedBudget) {
       return {
         success: false,

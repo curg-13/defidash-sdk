@@ -185,8 +185,9 @@ export async function calculateDeleverageEstimate(
   const supplyCoinType = position.collateral.coinType;
   const supplyDecimals = position.collateral.decimals;
 
-  // Flash loan with 0.5% buffer
-  const flashLoanUsdc = (borrowAmount * 1005n) / 1000n;
+  // Flash loan with small buffer (0.1%) to cover interest that accrues during tx
+  // Interest accrues immediately on borrowed USDC, so we need slightly more to fully repay
+  const flashLoanUsdc = (borrowAmount * 1001n) / 1000n;
   const flashLoanFee = ScallopFlashLoanClient.calculateFee(flashLoanUsdc);
   const totalRepayment = flashLoanUsdc + flashLoanFee;
 
@@ -266,7 +267,6 @@ export async function buildDeleverageTransaction(
   } = params;
 
   const supplyCoinType = position.collateral.coinType;
-  const supplyDecimals = position.collateral.decimals;
   const supplyAmount = position.collateral.amount;
 
   // Calculate estimates

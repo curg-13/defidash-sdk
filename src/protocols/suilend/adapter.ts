@@ -90,42 +90,62 @@ export class SuilendAdapter implements ILendingProtocol {
 
     if (deposits.length === 0 && borrows.length === 0) return null;
 
-    // Parse first deposit as collateral
+    // Find largest deposit by USD value as collateral
     let collateral: AssetPosition | null = null;
     if (deposits.length > 0) {
-      const deposit = deposits[0] as any;
-      const coinType = normalizeCoinType(deposit.coinType.name);
-      const reserve = getReserveByCoinType(coinType);
-      const amount = BigInt(deposit.depositedCtokenAmount);
-      const price = await getTokenPrice(coinType);
-      const decimals = reserve?.decimals || 9;
+      // Calculate USD value for each deposit to find the largest
+      const depositsWithValue = await Promise.all(
+        deposits.map(async (deposit: any) => {
+          const coinType = normalizeCoinType(deposit.coinType.name);
+          const reserve = getReserveByCoinType(coinType);
+          const amount = BigInt(deposit.depositedCtokenAmount);
+          const price = await getTokenPrice(coinType);
+          const decimals = reserve?.decimals || 9;
+          const valueUsd = (Number(amount) / Math.pow(10, decimals)) * price;
+          return { deposit, coinType, reserve, amount, price, decimals, valueUsd };
+        }),
+      );
+
+      // Sort by USD value descending and take the largest
+      depositsWithValue.sort((a, b) => b.valueUsd - a.valueUsd);
+      const largest = depositsWithValue[0];
 
       collateral = {
-        amount,
-        symbol: reserve?.symbol || "???",
-        coinType,
-        decimals,
-        valueUsd: (Number(amount) / Math.pow(10, decimals)) * price,
+        amount: largest.amount,
+        symbol: largest.reserve?.symbol || "???",
+        coinType: largest.coinType,
+        decimals: largest.decimals,
+        valueUsd: largest.valueUsd,
       };
     }
 
-    // Parse first borrow as debt
+    // Find largest borrow by USD value as debt
     let debt: AssetPosition | null = null;
     if (borrows.length > 0) {
-      const borrow = borrows[0] as any;
-      const coinType = normalizeCoinType(borrow.coinType.name);
-      const reserve = getReserveByCoinType(coinType);
-      const rawAmount = BigInt(borrow.borrowedAmount.value);
-      const amount = rawAmount / WAD;
-      const price = await getTokenPrice(coinType);
-      const decimals = reserve?.decimals || 6;
+      // Calculate USD value for each borrow to find the largest
+      const borrowsWithValue = await Promise.all(
+        borrows.map(async (borrow: any) => {
+          const coinType = normalizeCoinType(borrow.coinType.name);
+          const reserve = getReserveByCoinType(coinType);
+          const rawAmount = BigInt(borrow.borrowedAmount.value);
+          const amount = rawAmount / WAD;
+          const price = await getTokenPrice(coinType);
+          const decimals = reserve?.decimals || 6;
+          const valueUsd = (Number(amount) / Math.pow(10, decimals)) * price;
+          return { borrow, coinType, reserve, amount, price, decimals, valueUsd };
+        }),
+      );
+
+      // Sort by USD value descending and take the largest
+      borrowsWithValue.sort((a, b) => b.valueUsd - a.valueUsd);
+      const largest = borrowsWithValue[0];
 
       debt = {
-        amount,
-        symbol: reserve?.symbol || "USDC",
-        coinType,
-        decimals,
-        valueUsd: (Number(amount) / Math.pow(10, decimals)) * price,
+        amount: largest.amount,
+        symbol: largest.reserve?.symbol || "USDC",
+        coinType: largest.coinType,
+        decimals: largest.decimals,
+        valueUsd: largest.valueUsd,
       };
     }
 
