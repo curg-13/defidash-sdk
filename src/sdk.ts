@@ -5,10 +5,10 @@
  * Supports both Node.js (with keypair) and Browser (with wallet adapter)
  */
 
-import { SuiClient } from "@mysten/sui/client";
-import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { Transaction } from "@mysten/sui/transactions";
-import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
+import { SuiClient } from '@mysten/sui/client';
+import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+import { Transaction } from '@mysten/sui/transactions';
+import { MetaAg, getTokenPrice } from '@7kprotocol/sdk-ts';
 
 import {
   LendingProtocol,
@@ -24,19 +24,19 @@ import {
   BrowserLeverageParams,
   BrowserDeleverageParams,
   COIN_TYPES,
-} from "./types";
+} from './types';
 
-import { Scallop } from "@scallop-io/sui-scallop-sdk";
-import { SuilendAdapter } from "./protocols/suilend/adapter";
-import { NaviAdapter } from "./protocols/navi/adapter";
-import { ScallopAdapter } from "./protocols/scallop/adapter";
-import { ScallopFlashLoanClient } from "./protocols/scallop/flash-loan";
-import { normalizeCoinType, parseUnits } from "./utils";
+import { Scallop } from '@scallop-io/sui-scallop-sdk';
+import { SuilendAdapter } from './protocols/suilend/adapter';
+import { NaviAdapter } from './protocols/navi/adapter';
+import { ScallopAdapter } from './protocols/scallop/adapter';
+import { ScallopFlashLoanClient } from './protocols/scallop/flash-loan';
+import { normalizeCoinType, parseUnits } from './utils';
 import {
   DRYRUN_GAS_BUDGET,
   calculateActualGas,
   calculateOptimizedBudget,
-} from "./utils/gas";
+} from './utils/gas';
 import {
   SDKNotInitializedError,
   UnsupportedProtocolError,
@@ -47,13 +47,13 @@ import {
   InsufficientBalanceError,
   DryRunFailedError,
   KeypairRequiredError,
-} from "./utils/errors";
+} from './utils/errors';
 import {
   buildLeverageTransaction as buildLeverageTx,
   calculateLeveragePreview as calcPreview,
-} from "./strategies/leverage";
-import { buildDeleverageTransaction as buildDeleverageTx } from "./strategies/deleverage";
-import { getReserveByCoinType } from "./protocols/suilend/constants";
+} from './strategies/leverage';
+import { buildDeleverageTransaction as buildDeleverageTx } from './strategies/deleverage';
+import { getReserveByCoinType } from './protocols/suilend/constants';
 
 /**
  * DeFi Dash SDK - Main entry point
@@ -115,7 +115,7 @@ export class DefiDashSDK {
     this.suiClient = suiClient;
 
     // Detect if keypair or address
-    if (typeof keypairOrAddress === "string") {
+    if (typeof keypairOrAddress === 'string') {
       // Browser mode: address only
       this._userAddress = keypairOrAddress;
     } else {
@@ -179,7 +179,7 @@ export class DefiDashSDK {
    */
   private resolveCoinType(asset: string): string {
     // If already a full coin type, normalize it
-    if (asset.includes("::")) {
+    if (asset.includes('::')) {
       return normalizeCoinType(asset);
     }
 
@@ -231,12 +231,12 @@ export class DefiDashSDK {
     // Validate that exactly one of depositAmount or depositValueUsd is provided
     if (!params.depositAmount && !params.depositValueUsd) {
       throw new InvalidParameterError(
-        "Either depositAmount or depositValueUsd must be provided",
+        'Either depositAmount or depositValueUsd must be provided',
       );
     }
     if (params.depositAmount && params.depositValueUsd) {
       throw new InvalidParameterError(
-        "Cannot provide both depositAmount and depositValueUsd. Choose one.",
+        'Cannot provide both depositAmount and depositValueUsd. Choose one.',
       );
     }
 
@@ -392,7 +392,7 @@ export class DefiDashSDK {
       return {
         success: false,
         error:
-          "Keypair required for execution. Use buildLeverageTransaction for browser.",
+          'Keypair required for execution. Use buildLeverageTransaction for browser.',
       };
     }
 
@@ -478,7 +478,7 @@ export class DefiDashSDK {
       return {
         success: false,
         error:
-          "Keypair required for execution. Use buildDeleverageTransaction for browser.",
+          'Keypair required for execution. Use buildDeleverageTransaction for browser.',
       };
     }
 
@@ -657,6 +657,11 @@ export class DefiDashSDK {
    * - Calculations are estimates; actual execution may differ slightly
    * - Higher multipliers increase both returns and liquidation risk
    */
+  // Check ❌: we need to check this method for our SDK. this method is required for leverage preview in leverage.ts example
+  // but, in the internal code, calcPreview function is just hard coding not considering each protocol LTV, liquidation threshold, etc.
+  // so that I think we should update this method to consider each protocol parameters like leverage/deleverage strategies.
+  // this 'previewLeverage' function should be required query method for each protocol adapter to get accurate preview data. similarly getPositon.
+  // that's why we have to do implementation for this method properly.
   async previewLeverage(params: {
     depositAsset: string;
     depositAmount?: string;
@@ -666,12 +671,12 @@ export class DefiDashSDK {
     // Validate that exactly one is provided
     if (!params.depositAmount && !params.depositValueUsd) {
       throw new InvalidParameterError(
-        "Either depositAmount or depositValueUsd must be provided",
+        'Either depositAmount or depositValueUsd must be provided',
       );
     }
     if (params.depositAmount && params.depositValueUsd) {
       throw new InvalidParameterError(
-        "Cannot provide both depositAmount and depositValueUsd. Choose one.",
+        'Cannot provide both depositAmount and depositValueUsd. Choose one.',
       );
     }
 
@@ -744,7 +749,7 @@ export class DefiDashSDK {
       transactionBlock: await tx.build({ client: this.suiClient }),
     });
 
-    if (result.effects.status.status === "success") {
+    if (result.effects.status.status === 'success') {
       const actualGas = calculateActualGas(result.effects.gasUsed);
       const optimizedBudget = calculateOptimizedBudget(actualGas);
 
@@ -756,7 +761,7 @@ export class DefiDashSDK {
 
     return {
       success: false,
-      error: result.effects.status.error || "Dry run failed",
+      error: result.effects.status.error || 'Dry run failed',
     };
   }
 
@@ -802,7 +807,7 @@ export class DefiDashSDK {
       transactionBlock: await tx.build({ client: this.suiClient }),
     });
 
-    if (dryRunResult.effects.status.status !== "success") {
+    if (dryRunResult.effects.status.status !== 'success') {
       return {
         success: false,
         error: `Dry run failed: ${dryRunResult.effects.status.error}`,
@@ -832,7 +837,7 @@ export class DefiDashSDK {
       },
     });
 
-    if (result.effects?.status.status === "success") {
+    if (result.effects?.status.status === 'success') {
       return {
         success: true,
         txDigest: result.digest,
@@ -843,7 +848,7 @@ export class DefiDashSDK {
     return {
       success: false,
       txDigest: result.digest,
-      error: result.effects?.status.error || "Execution failed",
+      error: result.effects?.status.error || 'Execution failed',
     };
   }
 
@@ -861,7 +866,7 @@ export class DefiDashSDK {
     params: LeverageParams,
   ): Promise<StrategyResult> {
     if (!this.keypair) {
-      return { success: false, error: "Keypair required" };
+      return { success: false, error: 'Keypair required' };
     }
 
     try {
@@ -869,8 +874,8 @@ export class DefiDashSDK {
       const coinType = this.resolveCoinType(params.depositAsset);
       const reserve = getReserveByCoinType(coinType);
       const decimals = reserve?.decimals || 9;
-      const symbol = coinType.split("::").pop()?.toUpperCase() || "SUI";
-      const isSui = coinType.endsWith("::sui::SUI");
+      const symbol = coinType.split('::').pop()?.toUpperCase() || 'SUI';
+      const isSui = coinType.endsWith('::sui::SUI');
 
       // Get coin name for Scallop (e.g., "sui", "usdc")
       const coinName = this.getScallopCoinName(coinType);
@@ -904,13 +909,14 @@ export class DefiDashSDK {
       if (!this.options.secretKey) {
         return {
           success: false,
-          error: "Scallop operations require secretKey in SDK options. Pass { secretKey: 'suiprivkey...' } to DefiDashSDK constructor.",
+          error:
+            "Scallop operations require secretKey in SDK options. Pass { secretKey: 'suiprivkey...' } to DefiDashSDK constructor.",
         };
       }
 
       const scallop = new Scallop({
         secretKey: this.options.secretKey,
-        networkType: "mainnet",
+        networkType: 'mainnet',
       });
       await scallop.init();
 
@@ -951,7 +957,7 @@ export class DefiDashSDK {
       // Step 1: Flash loan USDC
       const [loanCoin, receipt] = await tx.borrowFlashLoan(
         Number(flashLoanUsdc),
-        "usdc",
+        'usdc',
       );
 
       // Step 2: Swap USDC → deposit asset
@@ -1002,7 +1008,11 @@ export class DefiDashSDK {
       let obligationHotPotato: any;
       let isNewObligation = false;
 
-      if (hasExistingObligation && existingObligationId && existingObligationKeyId) {
+      if (
+        hasExistingObligation &&
+        existingObligationId &&
+        existingObligationKeyId
+      ) {
         obligation = tx.txBlock.object(existingObligationId);
         obligationKey = tx.txBlock.object(existingObligationKeyId);
 
@@ -1018,18 +1028,18 @@ export class DefiDashSDK {
       }
 
       // Step 5: Update oracles (critical for Scallop!)
-      await tx.updateAssetPricesQuick([coinName, "usdc"]);
+      await tx.updateAssetPricesQuick([coinName, 'usdc']);
 
       // Step 6: Borrow USDC
       const borrowedUsdc = tx.borrow(
         obligation,
         obligationKey,
         Number(borrowAmount),
-        "usdc",
+        'usdc',
       );
 
       // Step 7: Repay flash loan
-      await tx.repayFlashLoan(borrowedUsdc, receipt, "usdc");
+      await tx.repayFlashLoan(borrowedUsdc, receipt, 'usdc');
 
       // Step 8: Finalize
       if (isNewObligation) {
@@ -1047,14 +1057,14 @@ export class DefiDashSDK {
           transactionBlock: await tx.txBlock.build({ client: this.suiClient }),
         });
 
-        if (dryRunResult.effects.status.status === "success") {
+        if (dryRunResult.effects.status.status === 'success') {
           const actualGas = calculateActualGas(dryRunResult.effects.gasUsed);
           const optimizedBudget = calculateOptimizedBudget(actualGas);
           return { success: true, gasUsed: optimizedBudget };
         }
         return {
           success: false,
-          error: dryRunResult.effects.status.error || "Dry run failed",
+          error: dryRunResult.effects.status.error || 'Dry run failed',
         };
       }
 
@@ -1064,7 +1074,7 @@ export class DefiDashSDK {
         transactionBlock: await tx.txBlock.build({ client: this.suiClient }),
       });
 
-      if (dryRunResult.effects.status.status !== "success") {
+      if (dryRunResult.effects.status.status !== 'success') {
         return {
           success: false,
           error: `Dry run failed: ${dryRunResult.effects.status.error}`,
@@ -1106,11 +1116,19 @@ export class DefiDashSDK {
   private getScallopCoinName(coinType: string): string {
     const normalized = normalizeCoinType(coinType);
     const COIN_NAME_MAP: Record<string, string> = {
-      "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI": "sui",
-      "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC": "usdc",
-      "0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN": "wusdc",
-      "0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN": "wusdt",
+      '0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI':
+        'sui',
+      '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC':
+        'usdc',
+      '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN':
+        'wusdc',
+      '0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN':
+        'wusdt',
     };
-    return COIN_NAME_MAP[normalized] || normalized.split("::").pop()?.toLowerCase() || "sui";
+    return (
+      COIN_NAME_MAP[normalized] ||
+      normalized.split('::').pop()?.toLowerCase() ||
+      'sui'
+    );
   }
 }
