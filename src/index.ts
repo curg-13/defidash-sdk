@@ -25,32 +25,42 @@
  */
 
 // Main SDK
-export {
-  DefiDashSDK,
-  BrowserLeverageParams,
-  BrowserDeleverageParams,
-} from "./sdk";
+export { DefiDashSDK } from "./sdk";
 
-// Types and Enums
+// Types, Interfaces, Enums, and Constants
 export {
+  // Enums
   LendingProtocol,
-  LeverageParams,
-  DeleverageParams,
-  PositionInfo,
-  AssetPosition,
-  StrategyResult,
-  LeveragePreview,
-  SDKOptions,
+  type PositionSide,
+
+  // Position types
+  type AssetPosition,
+  type PositionInfo,
+  type Position,
+  type AccountPortfolio,
+  type MarketAsset,
+
+  // Strategy types
+  type LeverageParams,
+  type DeleverageParams,
+  type StrategyResult,
+  type LeveragePreview,
+
+  // Config types
+  type SDKOptions,
+  type BrowserLeverageParams,
+  type BrowserDeleverageParams,
+
+  // Protocol interface
+  type ILendingProtocol,
+  type MarketReserve,
+
+  // Constants
   USDC_COIN_TYPE,
   SUI_COIN_TYPE,
-  AccountPortfolio,
-  MarketAsset,
+  DEFAULT_7K_PARTNER,
+  COIN_TYPES,
 } from "./types";
-
-// Protocol Adapters (for advanced usage)
-export { ILendingProtocol, ReserveInfo } from "./protocols/interface";
-export { SuilendAdapter } from "./protocols/suilend";
-export { NaviAdapter } from "./protocols/navi";
 
 // Strategy Builders (for advanced usage)
 export {
@@ -61,14 +71,14 @@ export {
 } from "./strategies";
 
 // Utilities
-export * from "./lib/utils";
+export * from "./utils";
 
 // Flash Loan
-export { ScallopFlashLoanClient } from "./lib/scallop";
+export { ScallopFlashLoanClient } from "./protocols/scallop/flash-loan";
 
-// Constants
+// Protocol-specific data
 export {
-  COIN_TYPES,
   SUILEND_RESERVES,
   getReserveByCoinType,
-} from "./lib/suilend/const";
+  getReserveBySymbol,
+} from "./protocols/suilend/constants";

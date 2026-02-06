@@ -1,6 +1,6 @@
 {
   "name": "defi-dash-sdk",
-  "version": "0.1.3-alpha.4",
+  "version": "0.1.3",
   "description": "Multi-protocol DeFi SDK for Sui blockchain - leverage, flash loans, and lending strategies",
   "files": [
     "dist",
@@ -12,8 +12,6 @@
     "build": "tsc",
     "test": "ts-node tests/runner.ts",
     "example:portfolio": "npx ts-node examples/get_portfolio.ts",
-    "example:markets": "npx ts-node examples/get_markets.ts",
-    "example:limits": "npx ts-node examples/get_limits.ts",
     "lint": "eslint src --ext .ts",
     "prepublishOnly": "npm run build",
     "publish:npm": "npm run build && npm publish",
@@ -21,6 +19,11 @@
     "publish:alpha": "npm run build && npm publish --tag alpha",
     "example:leverage": "ts-node examples/leverage.ts",
     "example:deleverage": "ts-node examples/deleverage.ts",
+    "test:all": "ts-node scripts/test_all_protocols.ts",
+    "test:all:execute": "ts-node scripts/test_all_protocols.ts --execute",
+    "test:leverage": "ts-node scripts/test_all_protocols.ts --leverage-only",
+    "test:deleverage": "ts-node scripts/test_all_protocols.ts --deleverage-only",
+    "check:balance": "ts-node scripts/check_balances.ts",
     "script:scallop-fees": "ts-node scripts/scallop/scallop_query-fees.ts",
     "script:scallop-flashloan": "ts-node scripts/scallop/scallop_flash-loan.ts",
     "script:scallop-flashloan-custom": "ts-node scripts/scallop/scallop_flash-loan-custom.ts",
@@ -48,7 +51,13 @@
     "script:scallop-leverage-exec": "ts-node scripts/scallop/scallop_leverage_exec.ts",
     "script:scallop-deleverage": "ts-node scripts/scallop/scallop_deleverage_dryrun.ts",
     "script:scallop-deleverage-exec": "ts-node scripts/scallop/scallop_deleverage_exec.ts",
-    "script:scallop-create-obligation": "ts-node scripts/scallop/scallop_create_obligation.ts"
+    "script:scallop-unlock": "ts-node scripts/scallop/scallop_unlock_obligation.ts",
+    "script:scallop-create-obligation": "ts-node scripts/scallop/scallop_create_obligation.ts",
+    "script:scallop-deposit": "ts-node scripts/scallop/scallop_deposit.ts",
+    "script:scallop-borrow": "ts-node scripts/scallop/scallop_borrow.ts",
+    "script:scallop-collaterals": "ts-node scripts/scallop/scallop_query_collaterals.ts",
+    "script:compare-btc": "ts-node scripts/compare_btc_collaterals.ts",
+    "script:merge-sui": "ts-node scripts/merge_sui_coins.ts"
   },
   "keywords": [],
   "author": "",
@@ -63,7 +72,7 @@
     "@suilend/sdk": "^1.1.99"
   },
   "dependencies": {
-    "@scallop-io/sui-scallop-sdk": "^2.3.13",
+    "@scallop-io/sui-scallop-sdk": "^2.3.14-rc.1",
     "@suilend/sui-fe": "^0.3.50",
     "bignumber.js": "^9.3.1"
   },

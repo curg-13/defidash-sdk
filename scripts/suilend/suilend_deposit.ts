@@ -1,6 +1,6 @@
 import * as dotenv from "dotenv";
 dotenv.config({ path: ".env.scripts" }); // Load SECRET_KEY from .env
- // Load other configs from .env.public
+// Load other configs from .env.public
 import {
   SuilendClient,
   LENDING_MARKET_ID,
@@ -11,7 +11,7 @@ import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { getTokenPrice } from "@7kprotocol/sdk-ts";
 import { getReserveByCoinType } from "../../src/lib/suilend/const";
-import { normalizeCoinType, formatUnits } from "../../src/lib/utils";
+import { normalizeCoinType, formatUnits } from "../../src/utils";
 
 // Config from .env.public
 const SUI_COIN_TYPE = "0x2::sui::SUI";
@@ -41,7 +41,7 @@ async function main() {
   const suilendClient = await SuilendClient.initialize(
     LENDING_MARKET_ID,
     LENDING_MARKET_TYPE,
-    suiClient
+    suiClient,
   );
 
   // 2. Show relevant balances
@@ -58,7 +58,7 @@ async function main() {
       console.log(
         `  • ${symbol}: ${formatUnits(b.totalBalance, decimals)} (Raw: ${
           b.totalBalance
-        })`
+        })`,
       );
     } else if (b.coinType === SUI_COIN_TYPE) {
       console.log(`  • SUI: ${formatUnits(b.totalBalance, 9)}`);
@@ -70,7 +70,7 @@ async function main() {
     const obligationOwnerCaps = await SuilendClient.getObligationOwnerCaps(
       userAddress,
       [LENDING_MARKET_TYPE],
-      suiClient
+      suiClient,
     );
 
     let obligationOwnerCap = obligationOwnerCaps[0];
@@ -93,7 +93,7 @@ async function main() {
       const newCaps = await SuilendClient.getObligationOwnerCaps(
         userAddress,
         [LENDING_MARKET_TYPE],
-        suiClient
+        suiClient,
       );
       obligationOwnerCap = newCaps[0];
       obligationId = obligationOwnerCap.obligationId;
@@ -109,7 +109,7 @@ async function main() {
     const obligationDetails = await SuilendClient.getObligation(
       obligationId,
       [LENDING_MARKET_TYPE],
-      suiClient
+      suiClient,
     );
 
     const existingDeposit = obligationDetails.deposits.find((d: any) => {
@@ -132,8 +132,8 @@ async function main() {
     console.log(
       `  Amount:      ${formatUnits(
         DEPOSIT_AMOUNT,
-        decimals
-      )} ${symbol} (Raw: ${DEPOSIT_AMOUNT})`
+        decimals,
+      )} ${symbol} (Raw: ${DEPOSIT_AMOUNT})`,
     );
     console.log(`  Price:       $${assetPrice.toLocaleString()}`);
     console.log(`  USD Value:   ~$${usdValue.toFixed(2)}`);
@@ -145,11 +145,11 @@ async function main() {
     // 5. Deposit if needed
     if (Number(depositValue) > DEPOSIT_THRESHOLD) {
       console.log(
-        `\n⏭️  Skipping deposit (existing > threshold: ${DEPOSIT_THRESHOLD})`
+        `\n⏭️  Skipping deposit (existing > threshold: ${DEPOSIT_THRESHOLD})`,
       );
     } else {
       console.log(
-        `\n🔄 Depositing ${formatUnits(DEPOSIT_AMOUNT, decimals)} ${symbol}...`
+        `\n🔄 Depositing ${formatUnits(DEPOSIT_AMOUNT, decimals)} ${symbol}...`,
       );
 
       const depositTx = new Transaction();
@@ -158,7 +158,7 @@ async function main() {
         DEPOSIT_COIN_TYPE,
         DEPOSIT_AMOUNT,
         depositTx,
-        obligationOwnerCap.id
+        obligationOwnerCap.id,
       );
 
       const depositResult = await suiClient.signAndExecuteTransaction({

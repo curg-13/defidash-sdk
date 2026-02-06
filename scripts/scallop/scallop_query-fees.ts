@@ -1,6 +1,14 @@
+/**
+ * Scallop Flash Loan Query - Fees
+ *
+ * Queries flash loan fees from on-chain storage
+ *
+ * Run with: npm run script:scallop-query-fees
+ */
+
 import * as dotenv from "dotenv";
-dotenv.config({ path: ".env.scripts" }); // Load SECRET_KEY from .env
- // Load other configs from .env.public
+dotenv.config({ path: ".env.scripts" });
+
 import { getFullnodeUrl, SuiClient } from "@mysten/sui/client";
 
 // Flash loan fees are stored in a separate on-chain table
@@ -36,8 +44,10 @@ const COIN_TYPE_TO_NAME: Record<string, string> = {
 };
 
 async function queryFlashLoanFees() {
-  console.log("Querying Flash Loan Fees from On-Chain Table...\n");
-  console.log("Flash Loan Fees Table ID:", FLASHLOAN_FEES_TABLE_ID);
+  console.log("═".repeat(60));
+  console.log("  Scallop Flash Loan Fees Query");
+  console.log("═".repeat(60));
+  console.log("\nFlash Loan Fees Table ID:", FLASHLOAN_FEES_TABLE_ID);
 
   const client = new SuiClient({
     url: process.env.SUI_FULLNODE_URL || getFullnodeUrl("mainnet"),
@@ -85,19 +95,26 @@ async function queryFlashLoanFees() {
       cursor = resp.nextCursor;
     } while (hasNextPage);
 
-    console.log("\n=== Flash Loan Fees ===");
+    console.log("\n" + "─".repeat(40));
+    console.log("  Flash Loan Fees:");
+    console.log("─".repeat(40));
     Object.entries(fees)
       .sort(([a], [b]) => a.localeCompare(b))
       .forEach(([coin, fee]) => {
         console.log(
-          `${coin.toUpperCase().padEnd(10)}: ${(fee * 100).toFixed(4)}%`
+          `  ${coin.toUpperCase().padEnd(10)}: ${(fee * 100).toFixed(4)}%`,
         );
       });
+    console.log("─".repeat(40));
+
+    console.log("\n" + "═".repeat(60));
+    console.log("  Done!");
+    console.log("═".repeat(60));
 
     // Return for use in other modules
     return fees;
   } catch (error) {
-    console.error("Failed to query fees:", error);
+    console.error("❌ Failed to query fees:", error);
     return {};
   }
 }
