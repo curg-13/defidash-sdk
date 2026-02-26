@@ -661,18 +661,23 @@ export class SuilendAdapter implements ILendingProtocol {
         ).div(10 ** rewardDecimals);
         const rewardPerYear = totalRewards.times(MS_PER_YEAR).div(durationMs);
 
-        // Use real reward token price if coinType is available; fall back to primary price
-        let rewardPrice = price;
+        // Fetch real reward token price.
+        // Suilend stores coinType.name without "0x" prefix — normalize before price lookup.
+        // If price is unavailable, skip this reward to avoid wildly wrong APY
+        // (e.g., using deposit asset price as proxy for DEEP → 3700% instead of 1.5%).
+        let rewardPrice: BigNumber | null = null;
         if (rewardCoinType) {
           try {
-            const fetchedPrice = await getTokenPrice(rewardCoinType);
+            const normalizedReward = normalizeCoinType(rewardCoinType);
+            const fetchedPrice = await getTokenPrice(normalizedReward);
             if (fetchedPrice > 0) {
               rewardPrice = new BigNumber(fetchedPrice);
             }
           } catch {
-            // fall back to primary token price proxy
+            // price unavailable — skip this reward
           }
         }
+        if (!rewardPrice) continue;
 
         apy += rewardPerYear.times(rewardPrice).div(totalUsd).toNumber();
       }

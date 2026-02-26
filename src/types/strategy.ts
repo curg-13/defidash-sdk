@@ -70,29 +70,25 @@ export interface StrategyResult {
  * Preview of leverage position before execution
  */
 export interface LeveragePreview {
+  // ─── Position Size ──────────────────────────────────────────────────────────
   /** Initial deposit value in USD */
   initialEquityUsd: number;
 
-  /** Flash loan amount in USDC */
+  /** Flash loan amount in USDC (raw, 6 decimals) */
   flashLoanUsdc: bigint;
 
-  /** Total position value after leverage */
+  /** Flash loan fee in USD (Scallop: ~0.2-0.3% of flash loan) */
+  flashLoanFeeUsd: number;
+
+  /** Total position value after leverage (collateral USD) */
   totalPositionUsd: number;
 
-  /** Total debt in USD */
+  /** Total debt in USD (flash loan repayment) */
   debtUsd: number;
 
+  // ─── Leverage & Risk ────────────────────────────────────────────────────────
   /** Effective multiplier achieved */
   effectiveMultiplier: number;
-
-  /** Position LTV percentage */
-  ltvPercent: number;
-
-  /** Estimated liquidation price */
-  liquidationPrice: number;
-
-  /** Price drop buffer before liquidation */
-  priceDropBuffer: number;
 
   /** Maximum allowed multiplier based on protocol LTV */
   maxMultiplier: number;
@@ -100,6 +96,43 @@ export interface LeveragePreview {
   /** Protocol LTV for this asset (0-1) */
   assetLtv: number;
 
+  /** Position LTV percentage */
+  ltvPercent: number;
+
   /** Liquidation threshold from protocol (0-1) */
   liquidationThreshold: number;
+
+  /** Estimated liquidation price (USD per token) */
+  liquidationPrice: number;
+
+  /** Price drop buffer before liquidation (%) */
+  priceDropBuffer: number;
+
+  // ─── APY & Earnings ────────────────────────────────────────────────────────
+  /** Supply APY breakdown for deposit asset */
+  supplyApyBreakdown: {
+    base: number;
+    reward: number;
+    total: number;
+  };
+
+  /** Borrow APY breakdown for borrow asset (USDC) */
+  borrowApyBreakdown: {
+    gross: number;
+    rebate: number;
+    net: number;
+  };
+
+  /**
+   * Net position APY = (totalPosition × supplyApy - debt × borrowApy) / initialEquity
+   * Represents annualized return on the initial equity.
+   */
+  netApy: number;
+
+  /** Estimated annual net earnings in USD */
+  annualNetEarningsUsd: number;
+
+  // ─── Execution Costs ───────────────────────────────────────────────────────
+  /** Estimated swap slippage % (from 7k quote or default estimate) */
+  swapSlippagePct: number;
 }

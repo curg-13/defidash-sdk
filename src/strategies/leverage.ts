@@ -92,27 +92,39 @@ export async function calculateLeveragePreview(params: {
   const flashLoanUsd = initialEquityUsd * (multiplier - 1);
   const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6 * 1.02)); // 2% buffer
 
+  const SCALLOP_FLASH_LOAN_FEE_RATE = 0.0005; // 0.05% = 5 basis points
+  const flashLoanFeeUsd =
+    (Number(flashLoanUsdc) / 1e6) * SCALLOP_FLASH_LOAN_FEE_RATE;
+
   const totalPositionUsd = initialEquityUsd * multiplier;
-  const debtUsd = flashLoanUsd;
+  const debtUsd = flashLoanUsd + flashLoanFeeUsd;
   const ltvPercent = (debtUsd / totalPositionUsd) * 100;
 
   // Calculate liquidation price using liquidation threshold
   const totalCollateralAmount = depositAmountHuman * multiplier;
-  const liquidationPrice = debtUsd / (totalCollateralAmount * liquidationThreshold);
+  const liquidationPrice =
+    debtUsd / (totalCollateralAmount * liquidationThreshold);
   const priceDropBuffer = (1 - liquidationPrice / depositPrice) * 100;
 
   return {
     initialEquityUsd,
     flashLoanUsdc,
+    flashLoanFeeUsd,
     totalPositionUsd,
     debtUsd,
     effectiveMultiplier: multiplier,
-    ltvPercent,
-    liquidationPrice,
-    priceDropBuffer,
     maxMultiplier,
     assetLtv: ltv,
+    ltvPercent,
     liquidationThreshold,
+    liquidationPrice,
+    priceDropBuffer,
+    // APY fields — not computed here; use sdk.previewLeverage for full APY/earnings data
+    supplyApyBreakdown: { base: 0, reward: 0, total: 0 },
+    borrowApyBreakdown: { gross: 0, rebate: 0, net: 0 },
+    netApy: 0,
+    annualNetEarningsUsd: 0,
+    swapSlippagePct: 1.0,
   };
 }
 
