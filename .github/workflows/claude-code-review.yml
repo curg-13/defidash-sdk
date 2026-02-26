@@ -1,0 +1,50 @@
+name: Claude Code Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request for a DeFi SDK on Sui blockchain. Focus on:
+
+            ## Code Quality
+            - TypeScript best practices and type safety
+            - Consistent error handling patterns
+            - No dead code or unused imports
+
+            ## DeFi Security (Critical)
+            - Flash loan repayment safety (must repay in same PTB)
+            - Slippage protection on swaps (min amount out)
+            - Oracle staleness checks
+            - Input validation on amounts, multipliers, coin types
+            - No hardcoded secrets or private keys
+            - Safe arithmetic (no precision loss in token amounts)
+
+            ## Protocol Integration
+            - Correct coin type normalization (0x prefix, 64-char padding)
+            - Proper error handling for on-chain queries
+            - Conservative fallback values for unsupported assets
+
+            Rate issues as: CRITICAL, HIGH, MEDIUM, LOW.
+            Use inline comments for specific code issues.
+            Post a summary comment with overall assessment.
+
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"

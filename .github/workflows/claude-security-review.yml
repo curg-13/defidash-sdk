@@ -1,0 +1,25 @@
+name: Security Review
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - 'src/protocols/**'
+      - 'src/strategies/**'
+      - 'src/sdk.ts'
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: anthropics/claude-code-security-review@main
+        with:
+          comment-pr: true
+          claude-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
