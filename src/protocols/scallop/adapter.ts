@@ -1001,48 +1001,64 @@ export class ScallopAdapter implements ILendingProtocol {
   /**
    * Get asset risk parameters for leverage calculations
    *
-   * Scallop uses:
-   * - collateralFactor: Stored as fixed-point u64, divide by 2^32 for 0-1 ratio
-   * - liquidationFactor: Liquidation threshold
-   * - liquidationDiscount: Bonus for liquidators
+   * Queries on-chain risk_models table directly from the Scallop Market object,
+   * bypassing the SDK's buggy queryMarket() (isLayerZeroAsset crash).
+   *
+   * On-chain layout:
+   *   Market → risk_models (Table) → [TypeName key] → RiskModel
+   *   RiskModel fields are FixedPoint32 (u64 / 2^32 → 0-1 decimal)
    */
   async getAssetRiskParams(coinType: string): Promise<AssetRiskParams> {
     this.ensureInitialized();
 
-    const normalized = normalizeCoinType(coinType);
-    const coinName = this.coinTypeToNameMap[normalized];
+    const FALLBACK: AssetRiskParams = {
+      ltv: 0.5,
+      liquidationThreshold: 0.6,
+      liquidationBonus: 0.05,
+      maxMultiplier: 2.0,
+    };
 
-    if (!coinName) {
-      // Fallback to conservative defaults
-      return {
-        ltv: 0.5,
-        liquidationThreshold: 0.6,
-        liquidationBonus: 0.05,
-        maxMultiplier: 2.0,
-      };
-    }
+    const normalized = normalizeCoinType(coinType);
 
     try {
-      // Query market data from Scallop
-      const market = await this.query.queryMarket();
-      const collateral = market.collaterals?.[coinName];
+      // Step 1: Get risk_models table ID from Market object
+      const marketObj = await this.suiClient.getObject({
+        id: this.coreAddresses.market,
+        options: { showContent: true },
+      });
+      const marketFields = (marketObj.data?.content as any)?.fields;
+      const riskModelTableId =
+        marketFields?.risk_models?.fields?.table?.fields?.id?.id;
+      if (!riskModelTableId) return FALLBACK;
 
-      if (!collateral) {
-        return {
-          ltv: 0.5,
-          liquidationThreshold: 0.6,
-          liquidationBonus: 0.05,
-          maxMultiplier: 2.0,
-        };
-      }
+      // Step 2: Query risk model for the coin type
+      // Dynamic field key: coin type without "0x" prefix
+      const coinTypeKey = normalized.startsWith("0x")
+        ? normalized.slice(2)
+        : normalized;
 
-      // Scallop returns collateralFactor already as 0-1 decimal from SDK
-      const ltv = collateral.collateralFactor ?? 0.5;
-      const liquidationThreshold = collateral.liquidationFactor ?? 0.7;
-      const liquidationBonus = collateral.liquidationDiscount ?? 0.05;
+      const resp = await this.suiClient.getDynamicFieldObject({
+        parentId: riskModelTableId,
+        name: {
+          type: "0x1::type_name::TypeName",
+          value: { name: coinTypeKey },
+        },
+      });
 
-      // Calculate max multiplier: 1 / (1 - ltv)
-      const maxMultiplier = ltv > 0 && ltv < 1 ? 1 / (1 - ltv) : 1;
+      const rm = (resp.data?.content as any)?.fields?.value?.fields;
+      if (!rm) return FALLBACK;
+
+      // Step 3: Parse FixedPoint32 values (u64 / 2^32)
+      const DIVISOR = 2 ** 32;
+      const ltv = Number(rm.collateral_factor?.fields?.value) / DIVISOR;
+      const liquidationThreshold =
+        Number(rm.liquidation_factor?.fields?.value) / DIVISOR;
+      const liquidationBonus =
+        Number(rm.liquidation_discount?.fields?.value) / DIVISOR;
+
+      if (isNaN(ltv) || ltv <= 0 || ltv >= 1) return FALLBACK;
+
+      const maxMultiplier = 1 / (1 - ltv);
 
       return {
         ltv,
@@ -1051,13 +1067,7 @@ export class ScallopAdapter implements ILendingProtocol {
         maxMultiplier,
       };
     } catch {
-      // On error, return conservative defaults
-      return {
-        ltv: 0.5,
-        liquidationThreshold: 0.6,
-        liquidationBonus: 0.05,
-        maxMultiplier: 2.0,
-      };
+      return FALLBACK;
     }
   }
 

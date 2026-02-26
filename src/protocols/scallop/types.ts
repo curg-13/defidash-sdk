@@ -76,11 +76,16 @@ export const COIN_TYPE_MAP: Record<string, string> = {
     'weth',
   '0x027792d9fed7f9844eb4839566001bb6f6cb4804f66aa2da6fe1ee242d896881::coin::COIN':
     'wbtc',
-  // BTC variants
+  // BTC variants (Scallop-native addresses)
   '0xaafb102dd0902f5055cadecd687fb5b71ca82ef0e0285d90afde828ec58ca96b::btc::BTC':
     'xbtc',
   '0x5d89b60f87e587b54e5f87886356b0af23ce41dff56e506c6a47e8125c965a9d::lbtc::LBTC':
     'lbtc',
+  // BTC variants (SDK canonical addresses — same pool name for market queries)
+  '0x3e8e9423d80e1774a7ca128fccd8bf5f1f7753be658c5e645929037f7c819040::lbtc::LBTC':
+    'lbtc',
+  '0x876a4b7bce8aeaef60464c11f4026903e9afacab79b9b142686158aa86560b50::xbtc::XBTC':
+    'xbtc',
   // Protocol tokens
   '0x06864a6f921804860930db6ddbe2e16acdf8504495ea7481637a1c8b9a8fe54b::cetus::CETUS':
     'cetus',

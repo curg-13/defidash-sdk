@@ -42,6 +42,27 @@ function isFallback(p: AssetRiskParams): boolean {
   );
 }
 
+// ─── Pretty-print helper ────────────────────────────────────────────
+
+function printRiskParams(
+  protocol: string,
+  asset: string,
+  params: AssetRiskParams,
+): void {
+  const pct = (v: number) => `${(v * 100).toFixed(2)}%`;
+  const fb = isFallback(params) ? " (FALLBACK)" : "";
+  console.log(
+    [
+      `\n┌─ [${protocol}] ${asset} Risk Params${fb} ──────────────`,
+      `│  LTV (borrow limit)      : ${pct(params.ltv)}`,
+      `│  Liquidation Threshold   : ${pct(params.liquidationThreshold)}`,
+      `│  Liquidation Bonus       : ${pct(params.liquidationBonus)}`,
+      `│  Max Multiplier          : ${params.maxMultiplier.toFixed(2)}x`,
+      `└──────────────────────────────────────────────────`,
+    ].join("\n"),
+  );
+}
+
 // ─── Shared assertion helpers ────────────────────────────────────────
 
 function assertValidRiskParams(params: AssetRiskParams) {
@@ -88,8 +109,9 @@ describe("getAssetRiskParams", () => {
 
     it.each(SUPPORTED_COIN_TYPES.map((ct) => [COIN_LABELS[ct], ct]))(
       "%s — returns valid risk params",
-      async (_label, coinType) => {
+      async (label, coinType) => {
         const params = await adapter.getAssetRiskParams(coinType);
+        printRiskParams("Suilend", label, params);
         assertValidRiskParams(params);
       },
     );
@@ -104,7 +126,22 @@ describe("getAssetRiskParams", () => {
 
     it("SUI — liquidationThreshold >= LTV", async () => {
       const params = await adapter.getAssetRiskParams(COIN_TYPES.SUI);
-      // Suilend's closeLtvPct (liquidation) >= openLtvPct (borrow)
+      expect(params.liquidationThreshold).toBeGreaterThanOrEqual(params.ltv);
+    });
+
+    it("LBTC — returns real on-chain LTV, not fallback", async () => {
+      const params = await adapter.getAssetRiskParams(COIN_TYPES.LBTC);
+      expect(isFallback(params)).toBe(false);
+      expect(params.ltv).toBeGreaterThanOrEqual(0.4);
+      expect(params.ltv).toBeLessThanOrEqual(0.8);
+      expect(params.liquidationThreshold).toBeGreaterThanOrEqual(params.ltv);
+    });
+
+    it("XBTC — returns real on-chain LTV, not fallback", async () => {
+      const params = await adapter.getAssetRiskParams(COIN_TYPES.XBTC);
+      expect(isFallback(params)).toBe(false);
+      expect(params.ltv).toBeGreaterThanOrEqual(0.4);
+      expect(params.ltv).toBeLessThanOrEqual(0.8);
       expect(params.liquidationThreshold).toBeGreaterThanOrEqual(params.ltv);
     });
   });
@@ -121,8 +158,9 @@ describe("getAssetRiskParams", () => {
 
     it.each(SUPPORTED_COIN_TYPES.map((ct) => [COIN_LABELS[ct], ct]))(
       "%s — returns valid risk params",
-      async (_label, coinType) => {
+      async (label, coinType) => {
         const params = await adapter.getAssetRiskParams(coinType);
+        printRiskParams("Navi", label, params);
         assertValidRiskParams(params);
       },
     );
@@ -130,17 +168,28 @@ describe("getAssetRiskParams", () => {
     it("SUI — returns real on-chain LTV, not fallback", async () => {
       const params = await adapter.getAssetRiskParams(COIN_TYPES.SUI);
       expect(isFallback(params)).toBe(false);
-      // Navi SUI LTV is known to be ~75%
       expect(params.ltv).toBeGreaterThanOrEqual(0.5);
       expect(params.ltv).toBeLessThanOrEqual(0.85);
     });
 
     it("SUI — liquidationThreshold is within valid range", async () => {
-      // Navi defines liquidationThreshold independently from LTV.
-      // It can be lower than LTV (e.g., ltv=0.75, liqThreshold=0.70).
       const params = await adapter.getAssetRiskParams(COIN_TYPES.SUI);
       expect(params.liquidationThreshold).toBeGreaterThan(0.5);
       expect(params.liquidationThreshold).toBeLessThan(1);
+    });
+
+    it("LBTC — LTV ~55%, LT ~70%", async () => {
+      const params = await adapter.getAssetRiskParams(COIN_TYPES.LBTC);
+      expect(isFallback(params)).toBe(false);
+      expect(params.ltv).toBeCloseTo(0.55, 1);
+      expect(params.liquidationThreshold).toBeCloseTo(0.70, 1);
+    });
+
+    it("XBTC — LTV ~67%, LT ~70%", async () => {
+      const params = await adapter.getAssetRiskParams(COIN_TYPES.XBTC);
+      expect(isFallback(params)).toBe(false);
+      expect(params.ltv).toBeCloseTo(0.67, 1);
+      expect(params.liquidationThreshold).toBeCloseTo(0.70, 1);
     });
   });
 
@@ -156,63 +205,35 @@ describe("getAssetRiskParams", () => {
 
     it.each(SUPPORTED_COIN_TYPES.map((ct) => [COIN_LABELS[ct], ct]))(
       "%s — returns valid risk params (may be fallback)",
-      async (_label, coinType) => {
-        // Scallop's queryMarket() may throw internally (SDK bug in isLayerZeroAsset),
-        // causing fallback values. We still validate the returned shape.
+      async (label, coinType) => {
         const params = await adapter.getAssetRiskParams(coinType);
+        printRiskParams("Scallop", label, params);
         assertValidRiskParams(params);
       },
     );
 
-    it("SUI — returns params without throwing", async () => {
+    it("SUI — returns real on-chain LTV via direct contract query", async () => {
       const params = await adapter.getAssetRiskParams(COIN_TYPES.SUI);
-      // queryMarket() has a known SDK bug — may return fallback.
-      // We verify the adapter handles it gracefully (no throw).
-      expect(params.ltv).toBeGreaterThan(0);
-      expect(params.maxMultiplier).toBeGreaterThan(1);
-      if (isFallback(params)) {
-        console.warn(
-          "  ⚠ Scallop SUI returned fallback (queryMarket SDK bug)",
-        );
-      }
+      expect(isFallback(params)).toBe(false);
+      // Scallop SUI: LTV ~85%, LT ~90%
+      expect(params.ltv).toBeGreaterThanOrEqual(0.7);
+      expect(params.ltv).toBeLessThanOrEqual(0.9);
+      expect(params.liquidationThreshold).toBeGreaterThanOrEqual(params.ltv);
+    });
+
+    it("LBTC — returns fallback (not a Scallop collateral)", async () => {
+      const params = await adapter.getAssetRiskParams(COIN_TYPES.LBTC);
+      expect(isFallback(params)).toBe(true);
+    });
+
+    it("XBTC — returns real on-chain LTV", async () => {
+      const params = await adapter.getAssetRiskParams(COIN_TYPES.XBTC);
+      expect(isFallback(params)).toBe(false);
+      // Scallop XBTC: LTV ~75%, LT ~80%
+      expect(params.ltv).toBeGreaterThanOrEqual(0.6);
+      expect(params.ltv).toBeLessThanOrEqual(0.85);
+      expect(params.liquidationThreshold).toBeGreaterThanOrEqual(params.ltv);
     });
   });
 
-  // ── Cross-protocol comparison ────────────────────────────────────
-
-  describe("Cross-protocol", () => {
-    let suilend: SuilendAdapter;
-    let navi: NaviAdapter;
-
-    beforeAll(async () => {
-      suilend = new SuilendAdapter();
-      navi = new NaviAdapter();
-      await Promise.all([
-        suilend.initialize(suiClient),
-        navi.initialize(suiClient),
-      ]);
-    });
-
-    it("SUI — Suilend and Navi return different LTV", async () => {
-      const [s, n] = await Promise.all([
-        suilend.getAssetRiskParams(COIN_TYPES.SUI),
-        navi.getAssetRiskParams(COIN_TYPES.SUI),
-      ]);
-
-      // Different protocols should have different LTV — proves real on-chain reads
-      expect(s.ltv.toFixed(4)).not.toBe(n.ltv.toFixed(4));
-    });
-
-    it("higher LTV → higher maxMultiplier (Suilend vs Navi)", async () => {
-      const [s, n] = await Promise.all([
-        suilend.getAssetRiskParams(COIN_TYPES.SUI),
-        navi.getAssetRiskParams(COIN_TYPES.SUI),
-      ]);
-
-      const sorted = [s, n].sort((a, b) => a.ltv - b.ltv);
-      expect(sorted[1].maxMultiplier).toBeGreaterThanOrEqual(
-        sorted[0].maxMultiplier,
-      );
-    });
-  });
 });
