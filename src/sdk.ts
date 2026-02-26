@@ -5,10 +5,10 @@
  * Supports both Node.js (with keypair) and Browser (with wallet adapter)
  */
 
-import { SuiClient } from '@mysten/sui/client';
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
-import { Transaction } from '@mysten/sui/transactions';
-import { MetaAg, getTokenPrice } from '@7kprotocol/sdk-ts';
+import { SuiClient } from "@mysten/sui/client";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { Transaction } from "@mysten/sui/transactions";
+import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
 
 import {
   LendingProtocol,
@@ -24,19 +24,19 @@ import {
   BrowserLeverageParams,
   BrowserDeleverageParams,
   COIN_TYPES,
-} from './types';
+} from "./types";
 
-import { Scallop } from '@scallop-io/sui-scallop-sdk';
-import { SuilendAdapter } from './protocols/suilend/adapter';
-import { NaviAdapter } from './protocols/navi/adapter';
-import { ScallopAdapter } from './protocols/scallop/adapter';
-import { ScallopFlashLoanClient } from './protocols/scallop/flash-loan';
-import { normalizeCoinType, parseUnits } from './utils';
+import { Scallop } from "@scallop-io/sui-scallop-sdk";
+import { SuilendAdapter } from "./protocols/suilend/adapter";
+import { NaviAdapter } from "./protocols/navi/adapter";
+import { ScallopAdapter } from "./protocols/scallop/adapter";
+import { ScallopFlashLoanClient } from "./protocols/scallop/flash-loan";
+import { normalizeCoinType, parseUnits } from "./utils";
 import {
   DRYRUN_GAS_BUDGET,
   calculateActualGas,
   calculateOptimizedBudget,
-} from './utils/gas';
+} from "./utils/gas";
 import {
   SDKNotInitializedError,
   UnsupportedProtocolError,
@@ -47,13 +47,10 @@ import {
   InsufficientBalanceError,
   DryRunFailedError,
   KeypairRequiredError,
-} from './utils/errors';
-import {
-  buildLeverageTransaction as buildLeverageTx,
-  calculateLeveragePreview as calcPreview,
-} from './strategies/leverage';
-import { buildDeleverageTransaction as buildDeleverageTx } from './strategies/deleverage';
-import { getReserveByCoinType } from './protocols/suilend/constants';
+} from "./utils/errors";
+import { buildLeverageTransaction as buildLeverageTx } from "./strategies/leverage";
+import { buildDeleverageTransaction as buildDeleverageTx } from "./strategies/deleverage";
+import { getReserveByCoinType } from "./protocols/suilend/constants";
 
 /**
  * DeFi Dash SDK - Main entry point
@@ -115,7 +112,7 @@ export class DefiDashSDK {
     this.suiClient = suiClient;
 
     // Detect if keypair or address
-    if (typeof keypairOrAddress === 'string') {
+    if (typeof keypairOrAddress === "string") {
       // Browser mode: address only
       this._userAddress = keypairOrAddress;
     } else {
@@ -179,7 +176,7 @@ export class DefiDashSDK {
    */
   private resolveCoinType(asset: string): string {
     // If already a full coin type, normalize it
-    if (asset.includes('::')) {
+    if (asset.includes("::")) {
       return normalizeCoinType(asset);
     }
 
@@ -231,12 +228,12 @@ export class DefiDashSDK {
     // Validate that exactly one of depositAmount or depositValueUsd is provided
     if (!params.depositAmount && !params.depositValueUsd) {
       throw new InvalidParameterError(
-        'Either depositAmount or depositValueUsd must be provided',
+        "Either depositAmount or depositValueUsd must be provided",
       );
     }
     if (params.depositAmount && params.depositValueUsd) {
       throw new InvalidParameterError(
-        'Cannot provide both depositAmount and depositValueUsd. Choose one.',
+        "Cannot provide both depositAmount and depositValueUsd. Choose one.",
       );
     }
 
@@ -392,7 +389,7 @@ export class DefiDashSDK {
       return {
         success: false,
         error:
-          'Keypair required for execution. Use buildLeverageTransaction for browser.',
+          "Keypair required for execution. Use buildLeverageTransaction for browser.",
       };
     }
 
@@ -478,7 +475,7 @@ export class DefiDashSDK {
       return {
         success: false,
         error:
-          'Keypair required for execution. Use buildDeleverageTransaction for browser.',
+          "Keypair required for execution. Use buildDeleverageTransaction for browser.",
       };
     }
 
@@ -617,6 +614,7 @@ export class DefiDashSDK {
    * Useful for showing users what their leveraged position will look like.
    *
    * @param params - Preview parameters
+   * @param params.protocol - Lending protocol to use (suilend, navi, scallop)
    * @param params.depositAsset - Asset symbol (e.g., "SUI", "LBTC") or full coin type
    * @param params.depositAmount - Amount to deposit (required if depositValueUsd not provided)
    * @param params.depositValueUsd - USD value to deposit (required if depositAmount not provided)
@@ -625,12 +623,14 @@ export class DefiDashSDK {
    * @returns Preview containing position metrics, flash loan details, and risk parameters
    *
    * @throws {InvalidParameterError} If both or neither depositAmount and depositValueUsd provided
+   * @throws {InvalidParameterError} If multiplier exceeds protocol's max multiplier
    * @throws {UnknownAssetError} If asset symbol not recognized
    *
    * @example
    * ```typescript
    * // Preview with fixed amount
    * const preview = await sdk.previewLeverage({
+   *   protocol: 'suilend',
    *   depositAsset: 'LBTC',
    *   depositAmount: '0.001',
    *   multiplier: 2.0
@@ -640,11 +640,13 @@ export class DefiDashSDK {
    * console.log(`Flash Loan: ${preview.flashLoanUsdc / 1e6} USDC`);
    * console.log(`Total Position: $${preview.totalPositionUsd}`);
    * console.log(`Position LTV: ${preview.ltvPercent.toFixed(1)}%`);
+   * console.log(`Max Multiplier: ${preview.maxMultiplier.toFixed(2)}x`);
    * console.log(`Liquidation Price: $${preview.liquidationPrice}`);
    * console.log(`Price Drop Buffer: ${preview.priceDropBuffer.toFixed(1)}%`);
    *
    * // Preview with USD value
    * const preview2 = await sdk.previewLeverage({
+   *   protocol: 'scallop',
    *   depositAsset: 'SUI',
    *   depositValueUsd: 100,  // $100 worth
    *   multiplier: 3.0
@@ -652,17 +654,14 @@ export class DefiDashSDK {
    * ```
    *
    * @remarks
-   * - Does not require SDK initialization (standalone utility)
+   * - Queries protocol-specific LTV to calculate accurate max multiplier
+   * - Max multiplier = 1 / (1 - LTV), e.g., 65% LTV → 2.857x max
    * - Fetches current market prices from 7k Protocol
    * - Calculations are estimates; actual execution may differ slightly
    * - Higher multipliers increase both returns and liquidation risk
    */
-  // Check ❌: we need to check this method for our SDK. this method is required for leverage preview in leverage.ts example
-  // but, in the internal code, calcPreview function is just hard coding not considering each protocol LTV, liquidation threshold, etc.
-  // so that I think we should update this method to consider each protocol parameters like leverage/deleverage strategies.
-  // this 'previewLeverage' function should be required query method for each protocol adapter to get accurate preview data. similarly getPositon.
-  // that's why we have to do implementation for this method properly.
   async previewLeverage(params: {
+    protocol: LendingProtocol;
     depositAsset: string;
     depositAmount?: string;
     depositValueUsd?: number;
@@ -671,12 +670,12 @@ export class DefiDashSDK {
     // Validate that exactly one is provided
     if (!params.depositAmount && !params.depositValueUsd) {
       throw new InvalidParameterError(
-        'Either depositAmount or depositValueUsd must be provided',
+        "Either depositAmount or depositValueUsd must be provided",
       );
     }
     if (params.depositAmount && params.depositValueUsd) {
       throw new InvalidParameterError(
-        'Cannot provide both depositAmount and depositValueUsd. Choose one.',
+        "Cannot provide both depositAmount and depositValueUsd. Choose one.",
       );
     }
 
@@ -684,10 +683,26 @@ export class DefiDashSDK {
     const reserve = getReserveByCoinType(coinType);
     const decimals = reserve?.decimals || 8;
 
+    // Query protocol-specific risk parameters (LTV, liquidation threshold)
+    const adapter = this.protocols.get(params.protocol);
+    if (!adapter) {
+      throw new UnsupportedProtocolError(
+        `Protocol ${params.protocol} not initialized. Call init() first.`,
+      );
+    }
+    const riskParams = await adapter.getAssetRiskParams(coinType);
+
+    // Validate multiplier against protocol's max multiplier
+    if (params.multiplier > riskParams.maxMultiplier) {
+      throw new InvalidParameterError(
+        `Multiplier ${params.multiplier}x exceeds protocol max ${riskParams.maxMultiplier.toFixed(2)}x for ${params.depositAsset}`,
+      );
+    }
+
     // Convert depositValueUsd to depositAmount if needed
     let depositAmountStr: string;
+    const price = await getTokenPrice(coinType);
     if (params.depositValueUsd) {
-      const price = await getTokenPrice(coinType);
       const amountInToken = params.depositValueUsd / price;
       depositAmountStr = amountInToken.toFixed(decimals);
     } else {
@@ -695,12 +710,125 @@ export class DefiDashSDK {
     }
 
     const depositAmount = parseUnits(depositAmountStr, decimals);
+    const depositAmountHuman = Number(depositAmount) / Math.pow(10, decimals);
+    const initialEquityUsd = depositAmountHuman * price;
 
-    return calcPreview({
-      depositCoinType: coinType,
-      depositAmount,
-      multiplier: params.multiplier,
-    });
+    // Calculate flash loan amount = Initial Equity * (Multiplier - 1)
+    const flashLoanUsd = initialEquityUsd * (params.multiplier - 1);
+    const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6 * 1.02)); // 2% buffer
+
+    // Flash loan fee: query actual rate on-chain from Scallop FLASHLOAN_FEES_TABLE
+    // Leverage loop always borrows USDC via flash loan
+    const flashLoanFeeRate = await ScallopFlashLoanClient.fetchFlashLoanFeeRate(
+      this.suiClient,
+      COIN_TYPES.USDC,
+    );
+    const flashLoanFeeUsd = (Number(flashLoanUsdc) / 1e6) * flashLoanFeeRate;
+
+    const totalPositionUsd = initialEquityUsd * params.multiplier;
+    const debtUsd = flashLoanUsd + flashLoanFeeUsd;
+    const ltvPercent = (debtUsd / totalPositionUsd) * 100;
+
+    // Calculate liquidation price using protocol's actual liquidation threshold
+    const totalCollateralAmount = depositAmountHuman * params.multiplier;
+    const liquidationPrice =
+      debtUsd / (totalCollateralAmount * riskParams.liquidationThreshold);
+    const priceDropBuffer = (1 - liquidationPrice / price) * 100;
+
+    // ── APY & Earnings ────────────────────────────────────────────────────────
+    // Fetch supply APY for deposit asset
+    const depositApy = await adapter.getAssetApy(coinType);
+
+    // Fetch borrow APY for USDC (leverage loop always borrows USDC)
+    const usdcCoinType = COIN_TYPES.USDC;
+    let borrowApyData = {
+      supplyApy: 0,
+      rewardApy: 0,
+      totalSupplyApy: 0,
+      borrowApy: 0,
+      borrowRewardApy: 0,
+    };
+    try {
+      borrowApyData = await adapter.getAssetApy(usdcCoinType);
+    } catch {
+      // If USDC APY unavailable for this protocol, borrowApy stays 0
+    }
+
+    // Net APY = (totalPosition × supplyApy - debt × borrowApy) / initialEquity
+    const annualSupplyEarnings = totalPositionUsd * depositApy.totalSupplyApy;
+    const annualBorrowCost = debtUsd * borrowApyData.borrowApy;
+    const annualNetEarningsUsd = annualSupplyEarnings - annualBorrowCost;
+    const netApy =
+      initialEquityUsd > 0 ? annualNetEarningsUsd / initialEquityUsd : 0;
+
+    // ── Swap Slippage (7k Quote) ─────────────────────────────────────────────
+    // Get a real swap quote for USDC → depositAsset to estimate actual slippage
+    // flashLoanUsdc represents the swap input (USDC amount)
+    let swapSlippagePct = 1.0; // default fallback
+    let effectiveMultiplier = params.multiplier;
+
+    try {
+      const swapQuotes = await this.swapClient.quote({
+        amountIn: flashLoanUsdc.toString(),
+        coinTypeIn: COIN_TYPES.USDC,
+        coinTypeOut: coinType,
+      });
+
+      if (swapQuotes.length > 0) {
+        // Best quote = highest amountOut
+        const bestQuote = swapQuotes.sort(
+          (a: any, b: any) => Number(b.amountOut) - Number(a.amountOut),
+        )[0];
+
+        const actualAmountOut =
+          Number(bestQuote.amountOut) / Math.pow(10, decimals);
+        // Theoretical amount if no slippage: flashLoanUsd / depositPrice
+        const theoreticalAmountOut = Number(flashLoanUsdc) / 1e6 / price;
+
+        if (theoreticalAmountOut > 0) {
+          const slippageRatio =
+            (theoreticalAmountOut - actualAmountOut) / theoreticalAmountOut;
+          swapSlippagePct = Math.max(0, slippageRatio * 100);
+        }
+
+        // Effective total collateral = user deposit + actual swapped amount
+        const actualTotalToken = depositAmountHuman + actualAmountOut;
+        effectiveMultiplier =
+          actualAmountOut > 0
+            ? actualTotalToken / depositAmountHuman
+            : params.multiplier;
+      }
+    } catch {
+      // Quote failed — use defaults
+    }
+
+    return {
+      initialEquityUsd,
+      flashLoanUsdc,
+      flashLoanFeeUsd,
+      totalPositionUsd,
+      debtUsd,
+      effectiveMultiplier,
+      maxMultiplier: riskParams.maxMultiplier,
+      assetLtv: riskParams.ltv,
+      ltvPercent,
+      liquidationThreshold: riskParams.liquidationThreshold,
+      liquidationPrice,
+      priceDropBuffer,
+      supplyApyBreakdown: {
+        base: depositApy.supplyApy,
+        reward: depositApy.rewardApy,
+        total: depositApy.totalSupplyApy,
+      },
+      borrowApyBreakdown: {
+        gross: borrowApyData.borrowApy + borrowApyData.borrowRewardApy,
+        rebate: borrowApyData.borrowRewardApy,
+        net: borrowApyData.borrowApy,
+      },
+      netApy,
+      annualNetEarningsUsd,
+      swapSlippagePct,
+    };
   }
 
   // ============================================================================
@@ -749,7 +877,7 @@ export class DefiDashSDK {
       transactionBlock: await tx.build({ client: this.suiClient }),
     });
 
-    if (result.effects.status.status === 'success') {
+    if (result.effects.status.status === "success") {
       const actualGas = calculateActualGas(result.effects.gasUsed);
       const optimizedBudget = calculateOptimizedBudget(actualGas);
 
@@ -761,7 +889,7 @@ export class DefiDashSDK {
 
     return {
       success: false,
-      error: result.effects.status.error || 'Dry run failed',
+      error: result.effects.status.error || "Dry run failed",
     };
   }
 
@@ -807,7 +935,7 @@ export class DefiDashSDK {
       transactionBlock: await tx.build({ client: this.suiClient }),
     });
 
-    if (dryRunResult.effects.status.status !== 'success') {
+    if (dryRunResult.effects.status.status !== "success") {
       return {
         success: false,
         error: `Dry run failed: ${dryRunResult.effects.status.error}`,
@@ -837,7 +965,7 @@ export class DefiDashSDK {
       },
     });
 
-    if (result.effects?.status.status === 'success') {
+    if (result.effects?.status.status === "success") {
       return {
         success: true,
         txDigest: result.digest,
@@ -848,7 +976,7 @@ export class DefiDashSDK {
     return {
       success: false,
       txDigest: result.digest,
-      error: result.effects?.status.error || 'Execution failed',
+      error: result.effects?.status.error || "Execution failed",
     };
   }
 
@@ -866,7 +994,7 @@ export class DefiDashSDK {
     params: LeverageParams,
   ): Promise<StrategyResult> {
     if (!this.keypair) {
-      return { success: false, error: 'Keypair required' };
+      return { success: false, error: "Keypair required" };
     }
 
     try {
@@ -874,8 +1002,8 @@ export class DefiDashSDK {
       const coinType = this.resolveCoinType(params.depositAsset);
       const reserve = getReserveByCoinType(coinType);
       const decimals = reserve?.decimals || 9;
-      const symbol = coinType.split('::').pop()?.toUpperCase() || 'SUI';
-      const isSui = coinType.endsWith('::sui::SUI');
+      const symbol = coinType.split("::").pop()?.toUpperCase() || "SUI";
+      const isSui = coinType.endsWith("::sui::SUI");
 
       // Get coin name for Scallop (e.g., "sui", "usdc")
       const coinName = this.getScallopCoinName(coinType);
@@ -916,7 +1044,7 @@ export class DefiDashSDK {
 
       const scallop = new Scallop({
         secretKey: this.options.secretKey,
-        networkType: 'mainnet',
+        networkType: "mainnet",
       });
       await scallop.init();
 
@@ -957,7 +1085,7 @@ export class DefiDashSDK {
       // Step 1: Flash loan USDC
       const [loanCoin, receipt] = await tx.borrowFlashLoan(
         Number(flashLoanUsdc),
-        'usdc',
+        "usdc",
       );
 
       // Step 2: Swap USDC → deposit asset
@@ -1028,18 +1156,18 @@ export class DefiDashSDK {
       }
 
       // Step 5: Update oracles (critical for Scallop!)
-      await tx.updateAssetPricesQuick([coinName, 'usdc']);
+      await tx.updateAssetPricesQuick([coinName, "usdc"]);
 
       // Step 6: Borrow USDC
       const borrowedUsdc = tx.borrow(
         obligation,
         obligationKey,
         Number(borrowAmount),
-        'usdc',
+        "usdc",
       );
 
       // Step 7: Repay flash loan
-      await tx.repayFlashLoan(borrowedUsdc, receipt, 'usdc');
+      await tx.repayFlashLoan(borrowedUsdc, receipt, "usdc");
 
       // Step 8: Finalize
       if (isNewObligation) {
@@ -1057,14 +1185,14 @@ export class DefiDashSDK {
           transactionBlock: await tx.txBlock.build({ client: this.suiClient }),
         });
 
-        if (dryRunResult.effects.status.status === 'success') {
+        if (dryRunResult.effects.status.status === "success") {
           const actualGas = calculateActualGas(dryRunResult.effects.gasUsed);
           const optimizedBudget = calculateOptimizedBudget(actualGas);
           return { success: true, gasUsed: optimizedBudget };
         }
         return {
           success: false,
-          error: dryRunResult.effects.status.error || 'Dry run failed',
+          error: dryRunResult.effects.status.error || "Dry run failed",
         };
       }
 
@@ -1074,7 +1202,7 @@ export class DefiDashSDK {
         transactionBlock: await tx.txBlock.build({ client: this.suiClient }),
       });
 
-      if (dryRunResult.effects.status.status !== 'success') {
+      if (dryRunResult.effects.status.status !== "success") {
         return {
           success: false,
           error: `Dry run failed: ${dryRunResult.effects.status.error}`,
@@ -1116,19 +1244,19 @@ export class DefiDashSDK {
   private getScallopCoinName(coinType: string): string {
     const normalized = normalizeCoinType(coinType);
     const COIN_NAME_MAP: Record<string, string> = {
-      '0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI':
-        'sui',
-      '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC':
-        'usdc',
-      '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN':
-        'wusdc',
-      '0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN':
-        'wusdt',
+      "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI":
+        "sui",
+      "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC":
+        "usdc",
+      "0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN":
+        "wusdc",
+      "0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN":
+        "wusdt",
     };
     return (
       COIN_NAME_MAP[normalized] ||
-      normalized.split('::').pop()?.toLowerCase() ||
-      'sui'
+      normalized.split("::").pop()?.toLowerCase() ||
+      "sui"
     );
   }
 }

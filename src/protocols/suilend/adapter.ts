@@ -19,6 +19,8 @@ import {
   ILendingProtocol,
   PositionInfo,
   AssetPosition,
+  AssetRiskParams,
+  AssetApy,
   USDC_COIN_TYPE,
   AccountPortfolio,
   LendingProtocol,
@@ -33,6 +35,10 @@ import {
   calculateLiquidationPrice,
   calculateRewardApy,
 } from "./calculators";
+import {
+  calculateDepositAprPercent,
+  calculateBorrowAprPercent,
+} from "@suilend/sdk/utils/simulate";
 import BigNumber from "bignumber.js";
 
 // Suilend uses WAD (10^18) for internal precision
@@ -102,7 +108,15 @@ export class SuilendAdapter implements ILendingProtocol {
           const price = await getTokenPrice(coinType);
           const decimals = reserve?.decimals || 9;
           const valueUsd = (Number(amount) / Math.pow(10, decimals)) * price;
-          return { deposit, coinType, reserve, amount, price, decimals, valueUsd };
+          return {
+            deposit,
+            coinType,
+            reserve,
+            amount,
+            price,
+            decimals,
+            valueUsd,
+          };
         }),
       );
 
@@ -132,7 +146,15 @@ export class SuilendAdapter implements ILendingProtocol {
           const price = await getTokenPrice(coinType);
           const decimals = reserve?.decimals || 6;
           const valueUsd = (Number(amount) / Math.pow(10, decimals)) * price;
-          return { borrow, coinType, reserve, amount, price, decimals, valueUsd };
+          return {
+            borrow,
+            coinType,
+            reserve,
+            amount,
+            price,
+            decimals,
+            valueUsd,
+          };
         }),
       );
 
@@ -499,6 +521,188 @@ export class SuilendAdapter implements ILendingProtocol {
       positions,
       netApy: metrics.netApy.toNumber(),
       totalAnnualNetEarningsUsd: metrics.totalAnnualNetEarnings.toNumber(),
+    };
+  }
+
+  /**
+   * Get asset risk parameters for leverage calculations
+   *
+   * Suilend uses:
+   * - openLtvPct: LTV for opening positions (0-100)
+   * - closeLtvPct: LTV for liquidation threshold (0-100)
+   * - liquidationBonusBps: Liquidation bonus in basis points
+   */
+  async getAssetRiskParams(coinType: string): Promise<AssetRiskParams> {
+    this.ensureInitialized();
+
+    const normalized = normalizeCoinType(coinType);
+
+    // Find the reserve for this coin type
+    const reserve = this.client.lendingMarket.reserves.find(
+      (r) => normalizeCoinType(r.coinType.name) === normalized,
+    );
+
+    if (!reserve) {
+      // Fallback to conservative defaults
+      return {
+        ltv: 0.5,
+        liquidationThreshold: 0.6,
+        liquidationBonus: 0.05,
+        maxMultiplier: 2.0,
+      };
+    }
+
+    const config = reserve.config.element;
+    if (!config) {
+      return {
+        ltv: 0.5,
+        liquidationThreshold: 0.6,
+        liquidationBonus: 0.05,
+        maxMultiplier: 2.0,
+      };
+    }
+
+    // openLtvPct is u8 (0-100), convert to 0-1
+    const ltv = Number(config.openLtvPct) / 100;
+    // closeLtvPct is the liquidation threshold
+    const liquidationThreshold = Number(config.closeLtvPct) / 100;
+    // liquidationBonusBps is in basis points
+    const liquidationBonus = Number(config.liquidationBonusBps) / 10000;
+    // maxMultiplier = 1 / (1 - ltv), with safety margin
+    const maxMultiplier = ltv > 0 ? 1 / (1 - ltv) : 1;
+
+    return {
+      ltv,
+      liquidationThreshold,
+      liquidationBonus,
+      maxMultiplier,
+    };
+  }
+
+  /**
+   * Get current supply/borrow APY for an asset.
+   *
+   * Uses Suilend simulate utils directly on raw Reserve data so we don't need
+   * a full coinMetadataMap (which parseReserve requires for reward tokens).
+   *
+   * WAD for Suilend reserve internal decimals = 10^18.
+   */
+  async getAssetApy(coinType: string): Promise<AssetApy> {
+    this.ensureInitialized();
+
+    const normalized = normalizeCoinType(coinType);
+    const reserve = this.client.lendingMarket.reserves.find(
+      (r) => normalizeCoinType(r.coinType.name) === normalized,
+    );
+
+    if (!reserve) {
+      throw new Error(`Suilend: reserve not found for ${normalized}`);
+    }
+
+    // Use simulate utils directly — these only need the raw Reserve<string>
+    const SUILEND_WAD = 10n ** 18n;
+    const supplyAprPercent = calculateDepositAprPercent(reserve);
+    const borrowAprPercent = calculateBorrowAprPercent(reserve);
+
+    const supplyApy = supplyAprPercent.div(100).toNumber();
+    const borrowApy = borrowAprPercent.div(100).toNumber();
+
+    // Reward APY: estimate from active pool rewards.
+    // Uses actual reward token price via getTokenPrice (7k) where possible.
+    const mintDecimals = reserve.mintDecimals;
+    const availableAmount = new BigNumber(
+      reserve.availableAmount.toString(),
+    ).div(10 ** mintDecimals);
+    const borrowedAmount = new BigNumber(
+      reserve.borrowedAmount.value.toString(),
+    )
+      .div(SUILEND_WAD)
+      .div(10 ** mintDecimals);
+    const totalDeposited = availableAmount.plus(borrowedAmount);
+    const price = new BigNumber(reserve.price.value.toString()).div(
+      SUILEND_WAD,
+    );
+    const totalDepositedUsd = totalDeposited.times(price);
+    const totalBorrowedUsd = borrowedAmount.times(price);
+
+    const nowMs = Date.now();
+    const MS_PER_YEAR = 365 * 24 * 60 * 60 * 1000;
+
+    // Helper: sum active rewards from a poolRewardManager
+    // totalUsd: the pool size to use as APY denominator
+    //   - supply rewards → totalDepositedUsd
+    //   - borrow rewards → totalBorrowedUsd
+    const sumRewardApy = async (
+      poolRewards: typeof reserve.depositsPoolRewardManager.poolRewards,
+      totalUsd: BigNumber,
+    ): Promise<number> => {
+      if (totalUsd.lte(0)) return 0;
+      let apy = 0;
+      for (const poolReward of poolRewards) {
+        if (!poolReward) continue;
+        const startMs = Number(poolReward.startTimeMs);
+        const endMs = Number(poolReward.endTimeMs);
+        if (endMs <= nowMs || startMs >= endMs) continue;
+        const durationMs = endMs - startMs;
+
+        // Raw on-chain integer; detect decimals from coinType
+        // (assume 9 for SUI-ecosystem, 6 for stablecoins)
+        const rewardCoinType: string | undefined =
+          typeof (poolReward as any).coinType === "string"
+            ? (poolReward as any).coinType
+            : (poolReward as any).coinType?.name
+              ? String((poolReward as any).coinType.name)
+              : undefined;
+        const rewardDecimals = rewardCoinType?.toLowerCase().includes("usdc")
+          ? 6
+          : 9;
+        const totalRewards = new BigNumber(
+          poolReward.totalRewards.toString(),
+        ).div(10 ** rewardDecimals);
+        const rewardPerYear = totalRewards.times(MS_PER_YEAR).div(durationMs);
+
+        // Fetch real reward token price.
+        // Suilend stores coinType.name without "0x" prefix — normalize before price lookup.
+        // If price is unavailable, skip this reward to avoid wildly wrong APY
+        // (e.g., using deposit asset price as proxy for DEEP → 3700% instead of 1.5%).
+        let rewardPrice: BigNumber | null = null;
+        if (rewardCoinType) {
+          try {
+            const normalizedReward = normalizeCoinType(rewardCoinType);
+            const fetchedPrice = await getTokenPrice(normalizedReward);
+            if (fetchedPrice > 0) {
+              rewardPrice = new BigNumber(fetchedPrice);
+            }
+          } catch {
+            // price unavailable — skip this reward
+          }
+        }
+        if (!rewardPrice) continue;
+
+        apy += rewardPerYear.times(rewardPrice).div(totalUsd).toNumber();
+      }
+      return apy;
+    };
+
+    const rewardApy = await sumRewardApy(
+      reserve.depositsPoolRewardManager.poolRewards,
+      totalDepositedUsd,
+    );
+
+    // Borrow rewards reduce the effective borrow cost.
+    // Denominator = totalBorrowedUsd (not totalDepositedUsd) — covers borrow incentive value.
+    const borrowRewardApy = await sumRewardApy(
+      reserve.borrowsPoolRewardManager.poolRewards,
+      totalBorrowedUsd,
+    );
+
+    return {
+      supplyApy,
+      rewardApy,
+      totalSupplyApy: supplyApy + rewardApy,
+      // Net borrow cost: gross APR minus borrow incentive rebates
+      borrowApy: Math.max(0, borrowApy - borrowRewardApy),
+      borrowRewardApy,
     };
   }
 }

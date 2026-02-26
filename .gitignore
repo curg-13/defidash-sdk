@@ -54,6 +54,8 @@ out/
 TODO
 obligation_*.json
 update_test_imports.sh
+feature.md
+progress.md
 
 # Brain/AI artifacts
 .gemini/

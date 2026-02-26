@@ -43,4 +43,9 @@ export {
 } from "./constants";
 
 // Protocol interface and types
-export type { ILendingProtocol, MarketReserve } from "./protocol";
+export type {
+  ILendingProtocol,
+  MarketReserve,
+  AssetRiskParams,
+  AssetApy,
+} from "./protocol";

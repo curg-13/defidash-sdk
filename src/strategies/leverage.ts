@@ -68,8 +68,17 @@ export async function calculateLeveragePreview(params: {
   depositCoinType: string;
   depositAmount: bigint;
   multiplier: number;
+  /** Optional LTV from protocol (0-1). Default: 0.6 */
+  ltv?: number;
+  /** Optional liquidation threshold from protocol (0-1). Default: 0.65 */
+  liquidationThreshold?: number;
 }): Promise<LeveragePreview> {
   const { depositCoinType, depositAmount, multiplier } = params;
+
+  // Use protocol values if provided, otherwise use conservative defaults
+  const ltv = params.ltv ?? 0.6;
+  const liquidationThreshold = params.liquidationThreshold ?? 0.65;
+  const maxMultiplier = ltv > 0 && ltv < 1 ? 1 / (1 - ltv) : 1;
 
   const normalized = normalizeCoinType(depositCoinType);
   const reserve = getReserveByCoinType(normalized);
@@ -83,24 +92,39 @@ export async function calculateLeveragePreview(params: {
   const flashLoanUsd = initialEquityUsd * (multiplier - 1);
   const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6 * 1.02)); // 2% buffer
 
+  const SCALLOP_FLASH_LOAN_FEE_RATE = 0.0005; // 0.05% = 5 basis points
+  const flashLoanFeeUsd =
+    (Number(flashLoanUsdc) / 1e6) * SCALLOP_FLASH_LOAN_FEE_RATE;
+
   const totalPositionUsd = initialEquityUsd * multiplier;
-  const debtUsd = flashLoanUsd;
+  const debtUsd = flashLoanUsd + flashLoanFeeUsd;
   const ltvPercent = (debtUsd / totalPositionUsd) * 100;
 
-  // Assume 60% LTV for liquidation calculation
-  const LTV = 0.6;
-  const liquidationPrice = debtUsd / (depositAmountHuman * multiplier) / LTV;
+  // Calculate liquidation price using liquidation threshold
+  const totalCollateralAmount = depositAmountHuman * multiplier;
+  const liquidationPrice =
+    debtUsd / (totalCollateralAmount * liquidationThreshold);
   const priceDropBuffer = (1 - liquidationPrice / depositPrice) * 100;
 
   return {
     initialEquityUsd,
     flashLoanUsdc,
+    flashLoanFeeUsd,
     totalPositionUsd,
     debtUsd,
     effectiveMultiplier: multiplier,
+    maxMultiplier,
+    assetLtv: ltv,
     ltvPercent,
+    liquidationThreshold,
     liquidationPrice,
     priceDropBuffer,
+    // APY fields — not computed here; use sdk.previewLeverage for full APY/earnings data
+    supplyApyBreakdown: { base: 0, reward: 0, total: 0 },
+    borrowApyBreakdown: { gross: 0, rebate: 0, net: 0 },
+    netApy: 0,
+    annualNetEarningsUsd: 0,
+    swapSlippagePct: 1.0,
   };
 }
 

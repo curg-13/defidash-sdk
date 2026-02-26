@@ -1,7 +1,7 @@
 /**
- * DefiDash SDK - Portfolio Example
+ * DefiDash SDK - Portfolio Comparison
  *
- * Fetches aggregated portfolio across all supported protocols
+ * Fetches and compares portfolio across all supported protocols
  */
 
 import * as dotenv from "dotenv";
@@ -9,80 +9,240 @@ dotenv.config({ path: ".env" });
 
 import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { DefiDashSDK } from "../src";
-import {
-  logHeader,
-  logFooter,
-  logWallet,
-  logSDKInit,
-} from "../src/utils/logger";
+import { DefiDashSDK, LendingProtocol, AccountPortfolio } from "../src";
 
 const SUI_FULLNODE_URL =
   process.env.SUI_FULLNODE_URL || getFullnodeUrl("mainnet");
 
+const protocols: [LendingProtocol, string][] = [
+  [LendingProtocol.Suilend, "Suilend"],
+  [LendingProtocol.Navi, "Navi"],
+  [LendingProtocol.Scallop, "Scallop"],
+];
+
+interface PortfolioResult {
+  protocol: string;
+  success: boolean;
+  portfolio?: AccountPortfolio;
+  error?: string;
+}
+
+function formatUsd(value: number | undefined): string {
+  if (value === undefined) return "--";
+  return `$${value.toFixed(2)}`;
+}
+
+function formatPercent(value: number | undefined): string {
+  if (value === undefined) return "--";
+  return `${value.toFixed(2)}%`;
+}
+
+function formatHealthFactor(value: number | undefined): string {
+  if (value === undefined || value === Infinity) return "Safe";
+  if (value < 1.0) return `${value.toFixed(2)} ⚠️`;
+  if (value < 1.5) return `${value.toFixed(2)} ⚡`;
+  return value.toFixed(2);
+}
+
+async function fetchPortfolio(
+  sdk: DefiDashSDK,
+  protocol: LendingProtocol,
+  protocolName: string,
+  address: string,
+): Promise<PortfolioResult> {
+  try {
+    const adapter = (sdk as any).protocols.get(protocol);
+    if (!adapter) {
+      return {
+        protocol: protocolName,
+        success: false,
+        error: "Protocol not initialized",
+      };
+    }
+
+    const portfolio = await adapter.getAccountPortfolio(address);
+
+    return {
+      protocol: protocolName,
+      success: true,
+      portfolio,
+    };
+  } catch (error: any) {
+    return {
+      protocol: protocolName,
+      success: false,
+      error: error.message,
+    };
+  }
+}
+
+function printSummaryTable(results: PortfolioResult[]) {
+  console.log(
+    "\n┌────────────┬───────────────┬───────────────┬───────────────┬──────────────┬────────────┐",
+  );
+  console.log(
+    "│ Protocol   │ Net Value     │ Deposited     │ Debt          │ Health       │ Net APY    │",
+  );
+  console.log(
+    "├────────────┼───────────────┼───────────────┼───────────────┼──────────────┼────────────┤",
+  );
+
+  for (const result of results) {
+    if (result.success && result.portfolio) {
+      const p = result.portfolio;
+      console.log(
+        `│ ${result.protocol.padEnd(10)} │ ${formatUsd(p.netValueUsd).padStart(13)} │ ${formatUsd(p.totalDepositedUsd).padStart(13)} │ ${formatUsd(p.totalDebtUsd).padStart(13)} │ ${formatHealthFactor(p.healthFactor).padStart(12)} │ ${formatPercent(p.netApy).padStart(10)} │`,
+      );
+    } else {
+      console.log(
+        `│ ${result.protocol.padEnd(10)} │ ${"ERROR".padStart(13)} │ ${"--".padStart(13)} │ ${"--".padStart(13)} │ ${"--".padStart(12)} │ ${"--".padStart(10)} │`,
+      );
+    }
+  }
+
+  console.log(
+    "└────────────┴───────────────┴───────────────┴───────────────┴──────────────┴────────────┘",
+  );
+}
+
+function printTotals(results: PortfolioResult[]) {
+  const successResults = results.filter((r) => r.success && r.portfolio);
+
+  const totals = successResults.reduce(
+    (acc, r) => {
+      const p = r.portfolio!;
+      acc.netValue += p.netValueUsd || 0;
+      acc.deposited += p.totalDepositedUsd || 0;
+      acc.debt += p.totalDebtUsd || 0;
+      acc.annualEarnings += p.totalAnnualNetEarningsUsd || 0;
+      return acc;
+    },
+    { netValue: 0, deposited: 0, debt: 0, annualEarnings: 0 },
+  );
+
+  console.log("\nAggregated Totals:");
+  console.log("─".repeat(50));
+  console.log(`  Total Net Value:      ${formatUsd(totals.netValue)}`);
+  console.log(`  Total Deposited:      ${formatUsd(totals.deposited)}`);
+  console.log(`  Total Debt:           ${formatUsd(totals.debt)}`);
+  console.log(`  Annual Net Earnings:  ${formatUsd(totals.annualEarnings)}`);
+}
+
+function printPositionDetails(results: PortfolioResult[]) {
+  for (const result of results) {
+    if (!result.success || !result.portfolio) continue;
+
+    const p = result.portfolio;
+    if (p.positions.length === 0) continue;
+
+    console.log(`\n${result.protocol} Positions:`);
+    console.log("─".repeat(80));
+
+    console.table(
+      p.positions.map((pos) => ({
+        Symbol: pos.symbol,
+        Side: pos.side,
+        Amount: pos.amount.toFixed(6),
+        ValueUSD: formatUsd(pos.valueUsd),
+        APY: formatPercent(pos.apy * 100),
+        Rewards:
+          pos.rewards
+            ?.map((r) => `${r.amount.toFixed(4)} ${r.symbol}`)
+            .join(", ") || "-",
+        LiqPrice: pos.estimatedLiquidationPrice
+          ? formatUsd(pos.estimatedLiquidationPrice)
+          : "-",
+      })),
+    );
+  }
+}
+
 async function main() {
-  logHeader("DefiDash SDK - Portfolio");
+  console.log(
+    "═══════════════════════════════════════════════════════════════════════════════",
+  );
+  console.log("  Portfolio Comparison - All Protocols");
+  console.log(
+    "═══════════════════════════════════════════════════════════════════════════════\n",
+  );
 
   // Setup
   const secretKey = process.env.SECRET_KEY;
   if (!secretKey || secretKey === "YOUR_SECRET_KEY_HERE") {
-    console.error("   Error: SECRET_KEY not found in .env file.");
+    console.error("Error: SECRET_KEY not found in .env file.");
     return;
   }
 
   const suiClient = new SuiClient({ url: SUI_FULLNODE_URL });
   const keypair = Ed25519Keypair.fromSecretKey(secretKey as any);
-  logWallet(keypair.getPublicKey().toSuiAddress());
+  const address = keypair.getPublicKey().toSuiAddress();
+
+  console.log(`Wallet: ${address}\n`);
 
   // Initialize SDK
-  const sdk = new DefiDashSDK();
+  const sdk = new DefiDashSDK({ secretKey });
   await sdk.initialize(suiClient, keypair);
-  logSDKInit(true);
+  console.log("SDK initialized.\n");
 
-  // Fetch aggregated portfolio
-  console.log("\n   Fetching aggregated portfolio...\n");
-  const portfolios = await sdk.getAggregatedPortfolio();
+  const results: PortfolioResult[] = [];
 
-  for (const p of portfolios) {
-    console.log(`\n   Protocol: ${p.protocol}`);
-    console.log(`   Health Factor: ${p.healthFactor}`);
-    console.log(`   Net Value: $${p.netValueUsd.toFixed(2)}`);
-    console.log(`   Deposited (Supply): $${p.totalDepositedUsd?.toFixed(2)}`);
-    console.log(`   Debt (Actual): $${p.totalDebtUsd.toFixed(2)}`);
-    console.log(`   Weighted Borrows: $${p.weightedBorrowsUsd?.toFixed(2)}`);
-    console.log(`   Borrow Limit: $${p.borrowLimitUsd?.toFixed(2)}`);
-    console.log(`   Liq Threshold: $${p.liquidationThresholdUsd?.toFixed(2)}`);
+  // Fetch portfolio from each protocol
+  console.log("Fetching portfolios...");
+  for (const [protocol, protocolName] of protocols) {
+    process.stdout.write(`  ${protocolName}... `);
+    const result = await fetchPortfolio(sdk, protocol, protocolName, address);
+    results.push(result);
 
-    if (p.netApy !== undefined) {
-      console.log(`   Net APY (Equity): ${p.netApy.toFixed(2)}%`);
-      console.log(
-        `   Annual Net Earnings: $${p.totalAnnualNetEarningsUsd?.toFixed(2)}`,
-      );
-    }
-
-    if (p.positions.length > 0) {
-      console.table(
-        p.positions.map((pos) => ({
-          Symbol: pos.symbol,
-          Side: pos.side,
-          Amount: pos.amount,
-          ValueUSD: pos.valueUsd.toFixed(2),
-          APY: (pos.apy * 100).toFixed(2) + "%",
-          Rewards:
-            pos.rewards
-              ?.map((r) => `${r.amount.toFixed(6)} ${r.symbol}`)
-              .join(", ") || "",
-          EstLiq: pos.estimatedLiquidationPrice
-            ? `$${pos.estimatedLiquidationPrice.toFixed(2)}`
-            : "-",
-        })),
-      );
+    if (result.success) {
+      console.log("OK");
     } else {
-      console.log("   No active positions.");
+      console.log(`Error: ${result.error}`);
     }
   }
 
-  logFooter("Portfolio fetch complete!");
+  // Print summary table
+  console.log(
+    "\n═══════════════════════════════════════════════════════════════════════════════",
+  );
+  console.log("  Portfolio Summary");
+  console.log(
+    "═══════════════════════════════════════════════════════════════════════════════",
+  );
+
+  printSummaryTable(results);
+  printTotals(results);
+
+  // Print position details if any exist
+  const hasPositions = results.some(
+    (r) => r.success && r.portfolio && r.portfolio.positions.length > 0,
+  );
+
+  if (hasPositions) {
+    console.log(
+      "\n═══════════════════════════════════════════════════════════════════════════════",
+    );
+    console.log("  Position Details");
+    console.log(
+      "═══════════════════════════════════════════════════════════════════════════════",
+    );
+
+    printPositionDetails(results);
+  }
+
+  // Summary
+  const passed = results.filter((r) => r.success).length;
+  const failed = results.filter((r) => !r.success).length;
+
+  console.log(
+    "\n═══════════════════════════════════════════════════════════════════════════════",
+  );
+  console.log(`  Fetched: ${passed}/${protocols.length} protocols`);
+  if (failed > 0) {
+    console.log(`  Failed: ${results.filter((r) => !r.success).map((r) => r.protocol).join(", ")}`);
+  }
+  console.log(
+    "═══════════════════════════════════════════════════════════════════════════════\n",
+  );
 }
 
 main().catch(console.error);

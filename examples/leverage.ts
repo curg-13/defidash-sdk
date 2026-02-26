@@ -96,6 +96,7 @@ async function main() {
 
   try {
     const preview = await sdk.previewLeverage({
+      protocol,
       depositAsset,
       depositAmount,
       depositValueUsd,
