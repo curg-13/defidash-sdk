@@ -68,8 +68,17 @@ export async function calculateLeveragePreview(params: {
   depositCoinType: string;
   depositAmount: bigint;
   multiplier: number;
+  /** Optional LTV from protocol (0-1). Default: 0.6 */
+  ltv?: number;
+  /** Optional liquidation threshold from protocol (0-1). Default: 0.65 */
+  liquidationThreshold?: number;
 }): Promise<LeveragePreview> {
   const { depositCoinType, depositAmount, multiplier } = params;
+
+  // Use protocol values if provided, otherwise use conservative defaults
+  const ltv = params.ltv ?? 0.6;
+  const liquidationThreshold = params.liquidationThreshold ?? 0.65;
+  const maxMultiplier = ltv > 0 && ltv < 1 ? 1 / (1 - ltv) : 1;
 
   const normalized = normalizeCoinType(depositCoinType);
   const reserve = getReserveByCoinType(normalized);
@@ -87,9 +96,9 @@ export async function calculateLeveragePreview(params: {
   const debtUsd = flashLoanUsd;
   const ltvPercent = (debtUsd / totalPositionUsd) * 100;
 
-  // Assume 60% LTV for liquidation calculation
-  const LTV = 0.6;
-  const liquidationPrice = debtUsd / (depositAmountHuman * multiplier) / LTV;
+  // Calculate liquidation price using liquidation threshold
+  const totalCollateralAmount = depositAmountHuman * multiplier;
+  const liquidationPrice = debtUsd / (totalCollateralAmount * liquidationThreshold);
   const priceDropBuffer = (1 - liquidationPrice / depositPrice) * 100;
 
   return {
@@ -101,6 +110,9 @@ export async function calculateLeveragePreview(params: {
     ltvPercent,
     liquidationPrice,
     priceDropBuffer,
+    maxMultiplier,
+    assetLtv: ltv,
+    liquidationThreshold,
   };
 }
 

@@ -17,6 +17,45 @@ export interface MarketReserve {
 }
 
 /**
+ * Asset risk parameters for leverage calculations
+ *
+ * Used to determine maximum multiplier and liquidation thresholds.
+ *
+ * @example
+ * ```typescript
+ * const riskParams = await protocol.getAssetRiskParams(coinType);
+ * // LTV 65% → maxMultiplier = 1 / (1 - 0.65) = 2.857
+ * const maxMultiplier = 1 / (1 - riskParams.ltv);
+ * ```
+ */
+export interface AssetRiskParams {
+  /** Loan-to-Value ratio (0-1). e.g., 0.65 = 65% */
+  ltv: number;
+  /** Liquidation threshold (0-1). Position liquidated when LTV exceeds this */
+  liquidationThreshold: number;
+  /** Liquidation bonus/penalty (0-1). e.g., 0.05 = 5% bonus for liquidators */
+  liquidationBonus: number;
+  /** Maximum multiplier based on LTV: 1 / (1 - ltv) */
+  maxMultiplier: number;
+}
+
+/**
+ * Asset APY information
+ */
+export interface AssetApy {
+  /** Base supply APR (0-1). e.g., 0.05 = 5% */
+  supplyApy: number;
+  /** Reward supply APR (0-1). e.g., 0.02 = 2%, from reward token incentives */
+  rewardApy: number;
+  /** Total supply APR (base + reward) */
+  totalSupplyApy: number;
+  /** NET borrow cost (gross APR − borrow incentive rebates, 0-1). What borrowers actually pay. */
+  borrowApy: number;
+  /** Borrow incentive rebate APR (0-1). Reduces gross borrow cost. e.g., 0.02 = 2% */
+  borrowRewardApy: number;
+}
+
+/**
  * Common interface for all lending protocol adapters
  */
 export interface ILendingProtocol {
@@ -128,4 +167,32 @@ export interface ILendingProtocol {
    * (e.g., Scallop tracks unstaked obligations)
    */
   clearPendingState?(): void;
+
+  /**
+   * Get asset risk parameters for leverage calculations
+   *
+   * Returns LTV, liquidation threshold, and calculated max multiplier
+   * for a given asset on this protocol.
+   *
+   * @param coinType - Full coin type string (normalized)
+   * @returns Asset risk parameters including LTV and max multiplier
+   *
+   * @example
+   * ```typescript
+   * const params = await protocol.getAssetRiskParams(COIN_TYPES.SUI);
+   * console.log(`LTV: ${params.ltv * 100}%`);
+   * console.log(`Max Multiplier: ${params.maxMultiplier.toFixed(2)}x`);
+   * ```
+   */
+  getAssetRiskParams(coinType: string): Promise<AssetRiskParams>;
+
+  /**
+   * Get current APY for an asset
+   *
+   * Returns supply and borrow APY including rewards (if applicable).
+   *
+   * @param coinType - Full coin type string (normalized)
+   * @returns Asset APY information
+   */
+  getAssetApy(coinType: string): Promise<AssetApy>;
 }

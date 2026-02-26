@@ -21,6 +21,8 @@ import {
   ILendingProtocol,
   PositionInfo,
   AssetPosition,
+  AssetRiskParams,
+  AssetApy,
   USDC_COIN_TYPE,
   AccountPortfolio,
   LendingProtocol,
@@ -371,6 +373,141 @@ export class NaviAdapter implements ILendingProtocol {
       positions,
       netApy,
       totalAnnualNetEarningsUsd,
+    };
+  }
+
+  /**
+   * Get asset risk parameters for leverage calculations
+   *
+   * Navi uses:
+   * - ltv: Loan-to-Value ratio (RAY format, 10^27)
+   * - liquidation_threshold: Liquidation threshold from pool config
+   * - liquidation_bonus: Liquidation bonus from pool config
+   */
+  async getAssetRiskParams(coinType: string): Promise<AssetRiskParams> {
+    this.ensureInitialized();
+
+    const pool = this.getPool(coinType);
+
+    if (!pool) {
+      // Fallback to conservative defaults
+      return {
+        ltv: 0.5,
+        liquidationThreshold: 0.6,
+        liquidationBonus: 0.05,
+        maxMultiplier: 2.0,
+      };
+    }
+
+    // Navi stores ltv as a string/number that may be in RAY format (10^27) or percentage
+    // Common values: 650000000000000000000000000 (65% in RAY) or 0.65 or 65
+    let ltv = 0.5;
+    if (pool.ltv) {
+      const ltvValue = parseFloat(pool.ltv.toString());
+      // If value is very large (RAY format: 10^27), normalize
+      if (ltvValue > 1e20) {
+        ltv = ltvValue / 1e27;
+      } else if (ltvValue > 1) {
+        // Percentage format (e.g., 65 = 65%)
+        ltv = ltvValue / 100;
+      } else {
+        // Already 0-1 format
+        ltv = ltvValue;
+      }
+    }
+
+    // Parse liquidation threshold similarly
+    let liquidationThreshold = 0.7;
+    if (pool.liquidationThreshold) {
+      const thresholdValue = parseFloat(pool.liquidationThreshold.toString());
+      if (thresholdValue > 1e20) {
+        liquidationThreshold = thresholdValue / 1e27;
+      } else if (thresholdValue > 1) {
+        liquidationThreshold = thresholdValue / 100;
+      } else {
+        liquidationThreshold = thresholdValue;
+      }
+    }
+
+    // Parse liquidation bonus
+    let liquidationBonus = 0.05;
+    if (pool.liquidationBonus) {
+      const bonusValue = parseFloat(pool.liquidationBonus.toString());
+      if (bonusValue > 1e20) {
+        liquidationBonus = bonusValue / 1e27;
+      } else if (bonusValue > 1) {
+        liquidationBonus = bonusValue / 100;
+      } else {
+        liquidationBonus = bonusValue;
+      }
+    }
+
+    // Calculate max multiplier: 1 / (1 - ltv)
+    const maxMultiplier = ltv > 0 && ltv < 1 ? 1 / (1 - ltv) : 1;
+
+    return {
+      ltv,
+      liquidationThreshold,
+      liquidationBonus,
+      maxMultiplier,
+    };
+  }
+
+  /**
+   * Get current supply/borrow APY for an asset.
+   *
+   * Navi's Pool object (from getPools) already contains:
+   * - currentBorrowRate: raw per-second borrow rate
+   * - currentSupplyRate: raw per-second supply rate
+   * - supplyIncentiveApyInfo.apy / borrowIncentiveApyInfo.apy: incentive APY (as a string percent)
+   *
+   * We convert raw per-second rates to per-year APR then add incentive APY.
+   */
+  async getAssetApy(coinType: string): Promise<AssetApy> {
+    this.ensureInitialized();
+
+    const pool = this.getPool(coinType);
+    if (!pool) {
+      throw new Error(
+        `Navi: pool not found for ${normalizeCoinType(coinType)}`,
+      );
+    }
+
+    // Navi's Pool (from getPools) already exposes pre-computed APY info:
+    //   supplyIncentiveApyInfo.apy   = effective supply APY (% string, e.g. "2.96")
+    //   supplyIncentiveApyInfo.vaultApr = base supply APR before incentives
+    //   borrowIncentiveApyInfo.vaultApr = gross borrow cost (% string)
+    //   borrowIncentiveApyInfo.apy    = net borrow APY after borrow incentives
+    //
+    // We use vaultApr as the base supply APY and borrowIncentiveApyInfo.vaultApr
+    // as the borrow APY (gross cost to borrower).
+    // Reward APY = supplyIncentiveApyInfo.apy - supplyIncentiveApyInfo.vaultApr
+    // (difference attributable to staking yield, vault rewards, etc.)
+
+    const supplyInfo = pool.supplyIncentiveApyInfo ?? {};
+    const borrowInfo = pool.borrowIncentiveApyInfo ?? {};
+
+    // Base supply APR (e.g., "2.96" → 0.0296)
+    const baseSupplyApr = parseFloat(supplyInfo.vaultApr ?? "0") / 100;
+    // Total effective supply APY including staking/vault rewards
+    const totalSupplyApy = parseFloat(supplyInfo.apy ?? "0") / 100;
+    // Extra reward beyond base (staking yield etc.)
+    const rewardApy = Math.max(0, totalSupplyApy - baseSupplyApr);
+
+    // Gross borrow APR (what borrowers pay before incentives)
+    const grossBorrowApr = parseFloat(borrowInfo.vaultApr ?? "0") / 100;
+    // Net effective borrow cost after borrow incentive rebates
+    // borrowInfo.apy = grossBorrowApr - boostedApr (rebate from NAVX/reward tokens)
+    const netBorrowApy =
+      parseFloat(borrowInfo.apy ?? borrowInfo.vaultApr ?? "0") / 100;
+    const borrowRewardApy = Math.max(0, grossBorrowApr - netBorrowApy);
+
+    return {
+      supplyApy: baseSupplyApr,
+      rewardApy,
+      totalSupplyApy,
+      borrowApy: netBorrowApy,
+      borrowRewardApy,
     };
   }
 }

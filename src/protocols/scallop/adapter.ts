@@ -12,29 +12,31 @@
  * - This adapter automatically unstakes/restakes obligations when needed
  */
 
-import { Transaction } from '@mysten/sui/transactions';
-import { SuiClient } from '@mysten/sui/client';
-import { SUI_CLOCK_OBJECT_ID } from '@mysten/sui/utils';
-import { Scallop, ScallopQuery } from '@scallop-io/sui-scallop-sdk';
+import { Transaction } from "@mysten/sui/transactions";
+import { SuiClient } from "@mysten/sui/client";
+import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
+import { Scallop, ScallopQuery } from "@scallop-io/sui-scallop-sdk";
 import {
   ILendingProtocol,
   PositionInfo,
   AssetPosition,
+  AssetRiskParams,
+  AssetApy,
   USDC_COIN_TYPE,
   AccountPortfolio,
   LendingProtocol,
   Position,
-} from '../../types';
-import { normalizeCoinType } from '../../utils';
-import { getReserveByCoinType } from '../suilend/constants';
-import { getTokenPrice } from '@7kprotocol/sdk-ts';
+} from "../../types";
+import { normalizeCoinType } from "../../utils";
+import { getReserveByCoinType } from "../suilend/constants";
+import { getTokenPrice } from "@7kprotocol/sdk-ts";
 import {
   COIN_TYPE_MAP,
   SCALLOP_COIN_TYPE_MAP,
   type ScallopCoreAddresses,
   type ScallopBorrowIncentiveAddresses,
   type ScallopVeScaAddresses,
-} from './types';
+} from "./types";
 
 // Re-export for backwards compatibility
 export { SCALLOP_COIN_TYPE_MAP };
@@ -46,7 +48,7 @@ export { SCALLOP_COIN_TYPE_MAP };
  * so they stay up-to-date when Scallop upgrades their contracts.
  */
 export class ScallopAdapter implements ILendingProtocol {
-  readonly name = 'scallop';
+  readonly name = "scallop";
 
   /**
    * Scallop's repay takes what it needs and leaves remaining balance in the coin.
@@ -93,14 +95,16 @@ export class ScallopAdapter implements ILendingProtocol {
     this.suiClient = suiClient;
 
     // Initialize Scallop SDK
-    this.scallop = new Scallop({ networkType: 'mainnet' });
+    this.scallop = new Scallop({ networkType: "mainnet" });
     await this.scallop.init();
     this.query = await this.scallop.createScallopQuery();
+    // Must call query.init() to populate internal whitelist Sets used by market queries
+    await this.query.init();
 
     // Fetch addresses from SDK (always up-to-date with protocol upgrades)
     const addresses = this.scallop.client.address.getAddresses();
     if (!addresses) {
-      throw new Error('Failed to get Scallop addresses from SDK');
+      throw new Error("Failed to get Scallop addresses from SDK");
     }
     this.populateAddresses(addresses);
 
@@ -120,7 +124,7 @@ export class ScallopAdapter implements ILendingProtocol {
   private populateAddresses(addresses: any): void {
     // Core protocol addresses
     this.coreAddresses = {
-      protocolPkg: addresses.core.packages?.protocol?.id || '',
+      protocolPkg: addresses.core.packages?.protocol?.id || "",
       version: addresses.core.version,
       market: addresses.core.market,
       coinDecimalsRegistry: addresses.core.coinDecimalsRegistry,
@@ -165,7 +169,7 @@ export class ScallopAdapter implements ILendingProtocol {
   private ensureInitialized() {
     if (!this.initialized) {
       throw new Error(
-        'ScallopAdapter not initialized. Call initialize() first.',
+        "ScallopAdapter not initialized. Call initialize() first.",
       );
     }
   }
@@ -209,7 +213,7 @@ export class ScallopAdapter implements ILendingProtocol {
     if (collaterals.length > 0) {
       const col = collaterals[0];
       // Scallop SDK returns type as { name: string }
-      const rawCoinType = col.coinType || col.type?.name || '';
+      const rawCoinType = col.coinType || col.type?.name || "";
       const coinType = normalizeCoinType(rawCoinType);
       const reserve = getReserveByCoinType(coinType);
       const decimals = reserve?.decimals || 9;
@@ -228,7 +232,7 @@ export class ScallopAdapter implements ILendingProtocol {
     if (debts.length > 0) {
       const d = debts[0];
       // Scallop SDK returns type as { name: string }
-      const rawCoinType = d.coinType || d.type?.name || '';
+      const rawCoinType = d.coinType || d.type?.name || "";
       const coinType = normalizeCoinType(rawCoinType);
       const reserve = getReserveByCoinType(coinType);
       const decimals = reserve?.decimals || 6;
@@ -237,7 +241,7 @@ export class ScallopAdapter implements ILendingProtocol {
 
       debt = {
         amount,
-        symbol: reserve?.symbol || 'USDC',
+        symbol: reserve?.symbol || "USDC",
         coinType,
         decimals,
         valueUsd: (Number(amount) / Math.pow(10, decimals)) * price,
@@ -250,7 +254,7 @@ export class ScallopAdapter implements ILendingProtocol {
       collateral,
       debt: debt || {
         amount: 0n,
-        symbol: 'USDC',
+        symbol: "USDC",
         coinType: USDC_COIN_TYPE,
         decimals: 6,
         valueUsd: 0,
@@ -322,7 +326,7 @@ export class ScallopAdapter implements ILendingProtocol {
     const clockRef = tx.sharedObjectRef({
       objectId: SUI_CLOCK_OBJECT_ID,
       mutable: false,
-      initialSharedVersion: '1',
+      initialSharedVersion: "1",
     });
 
     const result = tx.moveCall({
@@ -355,7 +359,7 @@ export class ScallopAdapter implements ILendingProtocol {
     const clockRef = tx.sharedObjectRef({
       objectId: SUI_CLOCK_OBJECT_ID,
       mutable: false,
-      initialSharedVersion: '1',
+      initialSharedVersion: "1",
     });
 
     tx.moveCall({
@@ -397,7 +401,7 @@ export class ScallopAdapter implements ILendingProtocol {
     const clockRef = tx.sharedObjectRef({
       objectId: SUI_CLOCK_OBJECT_ID,
       mutable: false,
-      initialSharedVersion: '1',
+      initialSharedVersion: "1",
     });
 
     tx.moveCall({
@@ -431,7 +435,7 @@ export class ScallopAdapter implements ILendingProtocol {
     const clockRef = tx.sharedObjectRef({
       objectId: SUI_CLOCK_OBJECT_ID,
       mutable: false,
-      initialSharedVersion: '1',
+      initialSharedVersion: "1",
     });
 
     tx.moveCall({
@@ -458,7 +462,7 @@ export class ScallopAdapter implements ILendingProtocol {
       options: { showContent: true },
     });
 
-    if (response.data?.content?.dataType === 'moveObject') {
+    if (response.data?.content?.dataType === "moveObject") {
       const fields = response.data.content.fields as any;
       return Boolean(fields.lock_key);
     }
@@ -546,7 +550,7 @@ export class ScallopAdapter implements ILendingProtocol {
     const obligations = await this.query.getObligations(userAddress);
 
     if (obligations.length === 0) {
-      throw new Error('No obligation found for withdrawal');
+      throw new Error("No obligation found for withdrawal");
     }
 
     const obligation = obligations[0];
@@ -562,7 +566,7 @@ export class ScallopAdapter implements ILendingProtocol {
     const clockRef = tx.sharedObjectRef({
       objectId: SUI_CLOCK_OBJECT_ID,
       mutable: false,
-      initialSharedVersion: '1',
+      initialSharedVersion: "1",
     });
 
     const result = tx.moveCall({
@@ -638,7 +642,7 @@ export class ScallopAdapter implements ILendingProtocol {
     }
 
     if (obligations.length === 0) {
-      throw new Error('No obligation found for borrowing');
+      throw new Error("No obligation found for borrowing");
     }
 
     const obligation = obligations[0];
@@ -683,7 +687,7 @@ export class ScallopAdapter implements ILendingProtocol {
     const obligations = await this.query.getObligations(userAddress);
 
     if (obligations.length === 0) {
-      throw new Error('No obligation found for repayment');
+      throw new Error("No obligation found for repayment");
     }
 
     const obligation = obligations[0];
@@ -758,12 +762,12 @@ export class ScallopAdapter implements ILendingProtocol {
 
     const oblData = obligationData as any;
     const collaterals = (oblData.collaterals || []).map((col: any) => ({
-      coinType: normalizeCoinType(col.coinType || col.type?.name || ''),
+      coinType: normalizeCoinType(col.coinType || col.type?.name || ""),
       amount: String(col.amount || col.depositAmount || 0),
     }));
 
     const debts = (oblData.debts || []).map((d: any) => ({
-      coinType: normalizeCoinType(d.coinType || d.type?.name || ''),
+      coinType: normalizeCoinType(d.coinType || d.type?.name || ""),
       amount: String(d.amount || d.borrowAmount || 0),
     }));
 
@@ -802,7 +806,7 @@ export class ScallopAdapter implements ILendingProtocol {
     const debts = oblData.debts || [];
 
     for (const col of collaterals) {
-      const coinType = normalizeCoinType(col.coinType || col.type?.name || '');
+      const coinType = normalizeCoinType(col.coinType || col.type?.name || "");
       const reserve = getReserveByCoinType(coinType);
       const decimals = reserve?.decimals || 9;
       const amount =
@@ -814,8 +818,8 @@ export class ScallopAdapter implements ILendingProtocol {
       positions.push({
         protocol: LendingProtocol.Scallop,
         coinType,
-        symbol: reserve?.symbol || 'UNKNOWN',
-        side: 'supply',
+        symbol: reserve?.symbol || "UNKNOWN",
+        side: "supply",
         amount,
         valueUsd,
         apy: 0,
@@ -823,7 +827,7 @@ export class ScallopAdapter implements ILendingProtocol {
     }
 
     for (const d of debts) {
-      const coinType = normalizeCoinType(d.coinType || d.type?.name || '');
+      const coinType = normalizeCoinType(d.coinType || d.type?.name || "");
       const reserve = getReserveByCoinType(coinType);
       const decimals = reserve?.decimals || 6;
       const amount =
@@ -835,8 +839,8 @@ export class ScallopAdapter implements ILendingProtocol {
       positions.push({
         protocol: LendingProtocol.Scallop,
         coinType,
-        symbol: reserve?.symbol || 'USDC',
-        side: 'borrow',
+        symbol: reserve?.symbol || "USDC",
+        side: "borrow",
         amount,
         valueUsd,
         apy: 0,
@@ -992,6 +996,161 @@ export class ScallopAdapter implements ILendingProtocol {
   getSuiClient(): SuiClient {
     this.ensureInitialized();
     return this.suiClient;
+  }
+
+  /**
+   * Get asset risk parameters for leverage calculations
+   *
+   * Scallop uses:
+   * - collateralFactor: Stored as fixed-point u64, divide by 2^32 for 0-1 ratio
+   * - liquidationFactor: Liquidation threshold
+   * - liquidationDiscount: Bonus for liquidators
+   */
+  async getAssetRiskParams(coinType: string): Promise<AssetRiskParams> {
+    this.ensureInitialized();
+
+    const normalized = normalizeCoinType(coinType);
+    const coinName = this.coinTypeToNameMap[normalized];
+
+    if (!coinName) {
+      // Fallback to conservative defaults
+      return {
+        ltv: 0.5,
+        liquidationThreshold: 0.6,
+        liquidationBonus: 0.05,
+        maxMultiplier: 2.0,
+      };
+    }
+
+    try {
+      // Query market data from Scallop
+      const market = await this.query.queryMarket();
+      const collateral = market.collaterals?.[coinName];
+
+      if (!collateral) {
+        return {
+          ltv: 0.5,
+          liquidationThreshold: 0.6,
+          liquidationBonus: 0.05,
+          maxMultiplier: 2.0,
+        };
+      }
+
+      // Scallop returns collateralFactor already as 0-1 decimal from SDK
+      const ltv = collateral.collateralFactor ?? 0.5;
+      const liquidationThreshold = collateral.liquidationFactor ?? 0.7;
+      const liquidationBonus = collateral.liquidationDiscount ?? 0.05;
+
+      // Calculate max multiplier: 1 / (1 - ltv)
+      const maxMultiplier = ltv > 0 && ltv < 1 ? 1 / (1 - ltv) : 1;
+
+      return {
+        ltv,
+        liquidationThreshold,
+        liquidationBonus,
+        maxMultiplier,
+      };
+    } catch {
+      // On error, return conservative defaults
+      return {
+        ltv: 0.5,
+        liquidationThreshold: 0.6,
+        liquidationBonus: 0.05,
+        maxMultiplier: 2.0,
+      };
+    }
+  }
+
+  /**
+   * Get current supply/borrow APY for an asset.
+   *
+   * Uses Scallop's queryMarket() which returns pool data including:
+   * - supplyApr / supplyApy: computed from the interest rate model
+   * - borrowApr / borrowApy: current borrow rate
+   * - spool reward APY is included when available from query
+   */
+  async getAssetApy(coinType: string): Promise<AssetApy> {
+    this.ensureInitialized();
+
+    const normalized = normalizeCoinType(coinType);
+    const coinName = this.coinTypeToNameMap[normalized];
+
+    if (!coinName) {
+      throw new Error(`Scallop: coin type not found in mapping: ${normalized}`);
+    }
+
+    try {
+      // Bypass an SDK bug in isLayerZeroAsset by calling the indexer directly.
+      // query.indexer.getMarketPool fetches from Scallop REST API (/api/market/migrate)
+      // without going through the broken ScallopUtils code path.
+      const pool = await this.query.indexer.getMarketPool(coinName);
+
+      if (!pool) {
+        throw new Error(`Scallop: market pool not found for ${coinName}`);
+      }
+
+      // Scallop SDK calculates these from the interest rate model + utilization
+      // Values are 0-1 decimals already (e.g., 0.05 = 5%)
+      // pool.borrowApy from the indexer is the base (gross) borrow rate.
+      const supplyApy: number = pool.supplyApy ?? 0;
+      const grossBorrowApy: number = pool.borrowApy ?? 0;
+
+      // Spool supply reward APY if available
+      const rewardApy: number = (pool as any).rewardApy ?? 0;
+
+      // Borrow incentive rewards (sSUI, sSCA, ...) reduce the effective borrow cost.
+      // The REST API returns pool.rewards[] where each entry has rewardApr (0-1 decimal).
+      // The SDK getBorrowIncentivePool() has an internal bug, so we fetch directly from
+      // the Scallop REST API as a reliable fallback.
+      let borrowRewardApy = 0;
+      try {
+        let rewards: any[] = [];
+
+        // Try SDK indexer first
+        try {
+          const borrowIncentivePool =
+            await this.query.indexer.getBorrowIncentivePool(coinName);
+          rewards =
+            (borrowIncentivePool as any)?.rewards ??
+            Object.values((borrowIncentivePool as any)?.points ?? {});
+        } catch {
+          // SDK failed — fall through to REST API fetch
+        }
+
+        // Fallback: fetch REST API directly (handles SDK getBorrowIncentivePools bug)
+        if (rewards.length === 0) {
+          const resp = await fetch(
+            "https://sdk.api.scallop.io/api/borrowIncentivePools/migrate",
+          );
+          if (resp.ok) {
+            const data: Record<string, any> = await resp.json();
+            const pool = Object.values(data).find(
+              (p: any) => p?.coinName === coinName,
+            );
+            rewards = pool?.rewards ?? [];
+          }
+        }
+
+        for (const reward of rewards) {
+          if (reward && typeof reward.rewardApr === "number") {
+            borrowRewardApy += reward.rewardApr;
+          }
+        }
+      } catch {
+        // borrow incentive data unavailable — use 0
+      }
+
+      return {
+        supplyApy,
+        rewardApy,
+        totalSupplyApy: supplyApy + rewardApy,
+        // Net borrow cost: gross APR minus borrow incentive rebates
+        borrowApy: Math.max(0, grossBorrowApy - borrowRewardApy),
+        borrowRewardApy,
+      };
+    } catch (err) {
+      throw new Error(`Scallop: failed to get APY for ${coinName}: ${err}`);
+    }
   }
 }
 

@@ -93,4 +93,13 @@ export interface LeveragePreview {
 
   /** Price drop buffer before liquidation */
   priceDropBuffer: number;
+
+  /** Maximum allowed multiplier based on protocol LTV */
+  maxMultiplier: number;
+
+  /** Protocol LTV for this asset (0-1) */
+  assetLtv: number;
+
+  /** Liquidation threshold from protocol (0-1) */
+  liquidationThreshold: number;
 }

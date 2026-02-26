@@ -48,10 +48,7 @@ import {
   DryRunFailedError,
   KeypairRequiredError,
 } from './utils/errors';
-import {
-  buildLeverageTransaction as buildLeverageTx,
-  calculateLeveragePreview as calcPreview,
-} from './strategies/leverage';
+import { buildLeverageTransaction as buildLeverageTx } from './strategies/leverage';
 import { buildDeleverageTransaction as buildDeleverageTx } from './strategies/deleverage';
 import { getReserveByCoinType } from './protocols/suilend/constants';
 
@@ -617,6 +614,7 @@ export class DefiDashSDK {
    * Useful for showing users what their leveraged position will look like.
    *
    * @param params - Preview parameters
+   * @param params.protocol - Lending protocol to use (suilend, navi, scallop)
    * @param params.depositAsset - Asset symbol (e.g., "SUI", "LBTC") or full coin type
    * @param params.depositAmount - Amount to deposit (required if depositValueUsd not provided)
    * @param params.depositValueUsd - USD value to deposit (required if depositAmount not provided)
@@ -625,12 +623,14 @@ export class DefiDashSDK {
    * @returns Preview containing position metrics, flash loan details, and risk parameters
    *
    * @throws {InvalidParameterError} If both or neither depositAmount and depositValueUsd provided
+   * @throws {InvalidParameterError} If multiplier exceeds protocol's max multiplier
    * @throws {UnknownAssetError} If asset symbol not recognized
    *
    * @example
    * ```typescript
    * // Preview with fixed amount
    * const preview = await sdk.previewLeverage({
+   *   protocol: 'suilend',
    *   depositAsset: 'LBTC',
    *   depositAmount: '0.001',
    *   multiplier: 2.0
@@ -640,11 +640,13 @@ export class DefiDashSDK {
    * console.log(`Flash Loan: ${preview.flashLoanUsdc / 1e6} USDC`);
    * console.log(`Total Position: $${preview.totalPositionUsd}`);
    * console.log(`Position LTV: ${preview.ltvPercent.toFixed(1)}%`);
+   * console.log(`Max Multiplier: ${preview.maxMultiplier.toFixed(2)}x`);
    * console.log(`Liquidation Price: $${preview.liquidationPrice}`);
    * console.log(`Price Drop Buffer: ${preview.priceDropBuffer.toFixed(1)}%`);
    *
    * // Preview with USD value
    * const preview2 = await sdk.previewLeverage({
+   *   protocol: 'scallop',
    *   depositAsset: 'SUI',
    *   depositValueUsd: 100,  // $100 worth
    *   multiplier: 3.0
@@ -652,17 +654,14 @@ export class DefiDashSDK {
    * ```
    *
    * @remarks
-   * - Does not require SDK initialization (standalone utility)
+   * - Queries protocol-specific LTV to calculate accurate max multiplier
+   * - Max multiplier = 1 / (1 - LTV), e.g., 65% LTV → 2.857x max
    * - Fetches current market prices from 7k Protocol
    * - Calculations are estimates; actual execution may differ slightly
    * - Higher multipliers increase both returns and liquidation risk
    */
-  // Check ❌: we need to check this method for our SDK. this method is required for leverage preview in leverage.ts example
-  // but, in the internal code, calcPreview function is just hard coding not considering each protocol LTV, liquidation threshold, etc.
-  // so that I think we should update this method to consider each protocol parameters like leverage/deleverage strategies.
-  // this 'previewLeverage' function should be required query method for each protocol adapter to get accurate preview data. similarly getPositon.
-  // that's why we have to do implementation for this method properly.
   async previewLeverage(params: {
+    protocol: LendingProtocol;
     depositAsset: string;
     depositAmount?: string;
     depositValueUsd?: number;
@@ -684,10 +683,26 @@ export class DefiDashSDK {
     const reserve = getReserveByCoinType(coinType);
     const decimals = reserve?.decimals || 8;
 
+    // Query protocol-specific risk parameters (LTV, liquidation threshold)
+    const adapter = this.protocols.get(params.protocol);
+    if (!adapter) {
+      throw new UnsupportedProtocolError(
+        `Protocol ${params.protocol} not initialized. Call init() first.`,
+      );
+    }
+    const riskParams = await adapter.getAssetRiskParams(coinType);
+
+    // Validate multiplier against protocol's max multiplier
+    if (params.multiplier > riskParams.maxMultiplier) {
+      throw new InvalidParameterError(
+        `Multiplier ${params.multiplier}x exceeds protocol max ${riskParams.maxMultiplier.toFixed(2)}x for ${params.depositAsset}`,
+      );
+    }
+
     // Convert depositValueUsd to depositAmount if needed
     let depositAmountStr: string;
+    const price = await getTokenPrice(coinType);
     if (params.depositValueUsd) {
-      const price = await getTokenPrice(coinType);
       const amountInToken = params.depositValueUsd / price;
       depositAmountStr = amountInToken.toFixed(decimals);
     } else {
@@ -695,12 +710,36 @@ export class DefiDashSDK {
     }
 
     const depositAmount = parseUnits(depositAmountStr, decimals);
+    const depositAmountHuman = Number(depositAmount) / Math.pow(10, decimals);
+    const initialEquityUsd = depositAmountHuman * price;
 
-    return calcPreview({
-      depositCoinType: coinType,
-      depositAmount,
-      multiplier: params.multiplier,
-    });
+    // Calculate flash loan amount = Initial Equity * (Multiplier - 1)
+    const flashLoanUsd = initialEquityUsd * (params.multiplier - 1);
+    const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6 * 1.02)); // 2% buffer
+
+    const totalPositionUsd = initialEquityUsd * params.multiplier;
+    const debtUsd = flashLoanUsd;
+    const ltvPercent = (debtUsd / totalPositionUsd) * 100;
+
+    // Calculate liquidation price using protocol's actual liquidation threshold
+    const totalCollateralAmount = depositAmountHuman * params.multiplier;
+    const liquidationPrice =
+      debtUsd / (totalCollateralAmount * riskParams.liquidationThreshold);
+    const priceDropBuffer = (1 - liquidationPrice / price) * 100;
+
+    return {
+      initialEquityUsd,
+      flashLoanUsdc,
+      totalPositionUsd,
+      debtUsd,
+      effectiveMultiplier: params.multiplier,
+      ltvPercent,
+      liquidationPrice,
+      priceDropBuffer,
+      maxMultiplier: riskParams.maxMultiplier,
+      assetLtv: riskParams.ltv,
+      liquidationThreshold: riskParams.liquidationThreshold,
+    };
   }
 
   // ============================================================================
