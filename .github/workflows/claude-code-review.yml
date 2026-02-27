@@ -1,6 +1,7 @@
 name: Claude Code Review
 on:
   pull_request:
+    branches: [main, dev]
     types: [opened, synchronize, reopened]
 
 jobs:

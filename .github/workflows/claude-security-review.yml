@@ -1,6 +1,7 @@
 name: Security Review
 on:
   pull_request:
+    branches: [main, dev]
     types: [opened, synchronize]
     paths:
       - 'src/protocols/**'
