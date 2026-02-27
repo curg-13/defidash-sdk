@@ -24,13 +24,10 @@ import {
   BrowserLeverageParams,
   BrowserDeleverageParams,
   COIN_TYPES,
-  LEVERAGE_MULTIPLIER_BUFFER,
   FindBestRouteParams,
-  LeverageRoute,
   LeverageRouteResult,
 } from "./types";
 
-import { Scallop } from "@scallop-io/sui-scallop-sdk";
 import { SuilendAdapter } from "./protocols/suilend/adapter";
 import { NaviAdapter } from "./protocols/navi/adapter";
 import { ScallopAdapter } from "./protocols/scallop/adapter";
@@ -48,12 +45,13 @@ import {
   PositionNotFoundError,
   NoDebtError,
   InvalidParameterError,
-  InsufficientBalanceError,
-  DryRunFailedError,
   KeypairRequiredError,
 } from "./utils/errors";
 import { buildLeverageTransaction as buildLeverageTx } from "./strategies/leverage";
 import { buildDeleverageTransaction as buildDeleverageTx } from "./strategies/deleverage";
+import { previewLeverage as previewLeverageFn } from "./strategies/leverage-preview";
+import { findBestLeverageRoute as findBestLeverageRouteFn } from "./strategies/leverage-route";
+import { buildScallopLeverageTransaction } from "./strategies/scallop-leverage";
 import { getReserveByCoinType } from "./protocols/suilend/constants";
 
 /**
@@ -671,168 +669,22 @@ export class DefiDashSDK {
     depositValueUsd?: number;
     multiplier: number;
   }): Promise<LeveragePreview> {
-    // Validate that exactly one is provided
-    if (!params.depositAmount && !params.depositValueUsd) {
-      throw new InvalidParameterError(
-        "Either depositAmount or depositValueUsd must be provided",
-      );
-    }
-    if (params.depositAmount && params.depositValueUsd) {
-      throw new InvalidParameterError(
-        "Cannot provide both depositAmount and depositValueUsd. Choose one.",
-      );
-    }
-
+    const protocol = this.getProtocol(params.protocol);
     const coinType = this.resolveCoinType(params.depositAsset);
-    const reserve = getReserveByCoinType(coinType);
-    const decimals = reserve?.decimals || 8;
 
-    // Query protocol-specific risk parameters (LTV, liquidation threshold)
-    const adapter = this.protocols.get(params.protocol);
-    if (!adapter) {
-      throw new UnsupportedProtocolError(
-        `Protocol ${params.protocol} not initialized. Call init() first.`,
-      );
-    }
-    const riskParams = await adapter.getAssetRiskParams(coinType);
-
-    // Validate multiplier against protocol's max multiplier
-    if (params.multiplier > riskParams.maxMultiplier) {
-      throw new InvalidParameterError(
-        `Multiplier ${params.multiplier}x exceeds protocol max ${riskParams.maxMultiplier.toFixed(2)}x for ${params.depositAsset}`,
-      );
-    }
-
-    // Convert depositValueUsd to depositAmount if needed
-    let depositAmountStr: string;
-    const price = await getTokenPrice(coinType);
-    if (params.depositValueUsd) {
-      const amountInToken = params.depositValueUsd / price;
-      depositAmountStr = amountInToken.toFixed(decimals);
-    } else {
-      depositAmountStr = params.depositAmount!;
-    }
-
-    const depositAmount = parseUnits(depositAmountStr, decimals);
-    const depositAmountHuman = Number(depositAmount) / Math.pow(10, decimals);
-    const initialEquityUsd = depositAmountHuman * price;
-
-    // Calculate flash loan amount = Initial Equity * (Multiplier - 1)
-    const flashLoanUsd = initialEquityUsd * (params.multiplier - 1);
-    const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6));
-
-    // Flash loan fee: query actual rate on-chain from Scallop FLASHLOAN_FEES_TABLE
-    // Leverage loop always borrows USDC via flash loan
-    const flashLoanFeeRate = await ScallopFlashLoanClient.fetchFlashLoanFeeRate(
-      this.suiClient,
-      COIN_TYPES.USDC,
+    return previewLeverageFn(
+      {
+        coinType,
+        depositAmount: params.depositAmount,
+        depositValueUsd: params.depositValueUsd,
+        multiplier: params.multiplier,
+      },
+      {
+        protocol,
+        swapClient: this.swapClient,
+        suiClient: this.suiClient,
+      },
     );
-    const flashLoanFeeUsd = (Number(flashLoanUsdc) / 1e6) * flashLoanFeeRate;
-
-    const totalPositionUsd = initialEquityUsd * params.multiplier;
-    const debtUsd = flashLoanUsd + flashLoanFeeUsd;
-    const ltvPercent = (debtUsd / totalPositionUsd) * 100;
-
-    // Calculate liquidation price using protocol's actual liquidation threshold
-    const totalCollateralAmount = depositAmountHuman * params.multiplier;
-    const liquidationPrice =
-      debtUsd / (totalCollateralAmount * riskParams.liquidationThreshold);
-    const priceDropBuffer = (1 - liquidationPrice / price) * 100;
-
-    // ── APY & Earnings ────────────────────────────────────────────────────────
-    // Fetch supply APY for deposit asset
-    const depositApy = await adapter.getAssetApy(coinType);
-
-    // Fetch borrow APY for USDC (leverage loop always borrows USDC)
-    const usdcCoinType = COIN_TYPES.USDC;
-    let borrowApyData = {
-      supplyApy: 0,
-      rewardApy: 0,
-      totalSupplyApy: 0,
-      borrowApy: 0,
-      borrowRewardApy: 0,
-    };
-    try {
-      borrowApyData = await adapter.getAssetApy(usdcCoinType);
-    } catch {
-      // If USDC APY unavailable for this protocol, borrowApy stays 0
-    }
-
-    // Net APY = (totalPosition × supplyApy - debt × borrowApy) / initialEquity
-    const annualSupplyEarnings = totalPositionUsd * depositApy.totalSupplyApy;
-    const annualBorrowCost = debtUsd * borrowApyData.borrowApy;
-    const annualNetEarningsUsd = annualSupplyEarnings - annualBorrowCost;
-    const netApy =
-      initialEquityUsd > 0 ? annualNetEarningsUsd / initialEquityUsd : 0;
-
-    // ── Swap Slippage (7k Quote) ─────────────────────────────────────────────
-    // Get a real swap quote for USDC → depositAsset to estimate actual slippage
-    // flashLoanUsdc represents the swap input (USDC amount)
-    let swapSlippagePct = 1.0; // default fallback
-    let effectiveMultiplier = params.multiplier;
-
-    try {
-      const swapQuotes = await this.swapClient.quote({
-        amountIn: flashLoanUsdc.toString(),
-        coinTypeIn: COIN_TYPES.USDC,
-        coinTypeOut: coinType,
-      });
-
-      if (swapQuotes.length > 0) {
-        // Best quote = highest amountOut
-        const bestQuote = swapQuotes.sort(
-          (a: any, b: any) => Number(b.amountOut) - Number(a.amountOut),
-        )[0];
-
-        const actualAmountOut =
-          Number(bestQuote.amountOut) / Math.pow(10, decimals);
-        // Theoretical amount if no slippage: flashLoanUsd / depositPrice
-        const theoreticalAmountOut = Number(flashLoanUsdc) / 1e6 / price;
-
-        if (theoreticalAmountOut > 0) {
-          const slippageRatio =
-            (theoreticalAmountOut - actualAmountOut) / theoreticalAmountOut;
-          swapSlippagePct = Math.max(0, slippageRatio * 100);
-        }
-
-        // Effective total collateral = user deposit + actual swapped amount
-        const actualTotalToken = depositAmountHuman + actualAmountOut;
-        effectiveMultiplier =
-          actualAmountOut > 0
-            ? actualTotalToken / depositAmountHuman
-            : params.multiplier;
-      }
-    } catch {
-      // Quote failed — use defaults
-    }
-
-    return {
-      initialEquityUsd,
-      flashLoanUsdc,
-      flashLoanFeeUsd,
-      totalPositionUsd,
-      debtUsd,
-      effectiveMultiplier,
-      maxMultiplier: riskParams.maxMultiplier,
-      assetLtv: riskParams.ltv,
-      ltvPercent,
-      liquidationThreshold: riskParams.liquidationThreshold,
-      liquidationPrice,
-      priceDropBuffer,
-      supplyApyBreakdown: {
-        base: depositApy.supplyApy,
-        reward: depositApy.rewardApy,
-        total: depositApy.totalSupplyApy,
-      },
-      borrowApyBreakdown: {
-        gross: borrowApyData.borrowApy + borrowApyData.borrowRewardApy,
-        rebate: borrowApyData.borrowRewardApy,
-        net: borrowApyData.borrowApy,
-      },
-      netApy,
-      annualNetEarningsUsd,
-      swapSlippagePct,
-    };
   }
 
   // ============================================================================
@@ -865,145 +717,15 @@ export class DefiDashSDK {
   ): Promise<LeverageRouteResult> {
     this.ensureInitialized();
 
-    // Validate input
-    if (!params.depositAmount && !params.depositValueUsd) {
-      throw new InvalidParameterError(
-        "Either depositAmount or depositValueUsd must be provided",
-      );
-    }
-    if (params.depositAmount && params.depositValueUsd) {
-      throw new InvalidParameterError(
-        "Cannot provide both depositAmount and depositValueUsd. Choose one.",
-      );
-    }
-
-    const coinType = this.resolveCoinType(params.depositAsset);
-    const allProtocols = Array.from(this.protocols.keys());
-
-    // Phase 1: Get risk params from all protocols in parallel (lightweight)
-    const riskResults = await Promise.allSettled(
-      allProtocols.map((protocol) =>
-        this.protocols
-          .get(protocol)!
-          .getAssetRiskParams(coinType)
-          .then((riskParams) => ({ protocol, riskParams })),
-      ),
-    );
-
-    type RiskEntry = {
-      protocol: LendingProtocol;
-      riskParams: { maxMultiplier: number; ltv: number };
-    };
-    const successfulRisk: RiskEntry[] = [];
-    const failedProtocols: Array<{
-      protocol: LendingProtocol;
-      error: string;
-    }> = [];
-
-    riskResults.forEach((result, i) => {
-      if (result.status === "fulfilled") {
-        successfulRisk.push(result.value);
-      } else {
-        failedProtocols.push({
-          protocol: allProtocols[i],
-          error: result.reason?.message || String(result.reason),
-        });
-      }
-    });
-
-    if (successfulRisk.length === 0) {
-      throw new InvalidParameterError(
-        `No protocol supports asset "${params.depositAsset}" for leverage. ` +
-          `Errors: ${failedProtocols.map((f) => `${f.protocol}: ${f.error}`).join("; ")}`,
-      );
-    }
-
-    // Calculate safe multiplier = min(maxMultipliers) - buffer, floor at 1.1
-    const minMaxMultiplier = Math.min(
-      ...successfulRisk.map((r) => r.riskParams.maxMultiplier),
-    );
-    const safeMultiplier = Math.max(
-      1.1,
-      minMaxMultiplier - LEVERAGE_MULTIPLIER_BUFFER,
-    );
-
-    // Best max multiplier protocol
-    const bestMaxEntry = successfulRisk.reduce((best, curr) =>
-      curr.riskParams.maxMultiplier > best.riskParams.maxMultiplier
-        ? curr
-        : best,
-    );
-
-    // Phase 2: Call previewLeverage at safeMultiplier for all protocols + at near-max for best
-    const maxMultPreviewPromise = this.previewLeverage({
-      protocol: bestMaxEntry.protocol,
-      depositAsset: params.depositAsset,
-      depositAmount: params.depositAmount,
-      depositValueUsd: params.depositValueUsd,
-      multiplier:
-        Math.round((bestMaxEntry.riskParams.maxMultiplier - 0.01) * 100) / 100,
-    });
-
-    const safePreviewResults = await Promise.allSettled(
-      successfulRisk.map(({ protocol }) =>
+    return findBestLeverageRouteFn(params, {
+      protocols: this.protocols,
+      previewFn: (protocol, previewParams) =>
         this.previewLeverage({
           protocol,
-          depositAsset: params.depositAsset,
-          depositAmount: params.depositAmount,
-          depositValueUsd: params.depositValueUsd,
-          multiplier: safeMultiplier,
-        }).then((preview) => ({ protocol, preview })),
-      ),
-    );
-
-    type PreviewEntry = {
-      protocol: LendingProtocol;
-      preview: LeveragePreview;
-    };
-    const safeSuccessful: PreviewEntry[] = [];
-
-    safePreviewResults.forEach((result, i) => {
-      if (result.status === "fulfilled") {
-        safeSuccessful.push(result.value);
-      } else {
-        failedProtocols.push({
-          protocol: successfulRisk[i].protocol,
-          error: `Failed at safe multiplier ${safeMultiplier}x: ${result.reason?.message}`,
-        });
-      }
+          ...previewParams,
+        }),
+      resolveCoinType: (asset) => this.resolveCoinType(asset),
     });
-
-    if (safeSuccessful.length === 0) {
-      throw new InvalidParameterError(
-        `No protocol could preview at safe multiplier ${safeMultiplier}x for "${params.depositAsset}"`,
-      );
-    }
-
-    // Best APY = highest netApy among safe previews
-    const bestApyEntry = safeSuccessful.reduce((best, curr) =>
-      curr.preview.netApy > best.preview.netApy ? curr : best,
-    );
-
-    // Await the max multiplier preview
-    const maxMultPreview = await maxMultPreviewPromise;
-
-    return {
-      bestMaxMultiplier: {
-        protocol: bestMaxEntry.protocol,
-        multiplier:
-          Math.round((bestMaxEntry.riskParams.maxMultiplier - 0.01) * 100) /
-          100,
-        preview: maxMultPreview,
-      },
-      bestApy: {
-        protocol: bestApyEntry.protocol,
-        multiplier: safeMultiplier,
-        preview: bestApyEntry.preview,
-      },
-      safeMultiplier,
-      allPreviews: safeSuccessful,
-      failedProtocols,
-    };
   }
 
   // ============================================================================
@@ -1172,188 +894,33 @@ export class DefiDashSDK {
       return { success: false, error: "Keypair required" };
     }
 
+    if (!this.options.secretKey) {
+      return {
+        success: false,
+        error:
+          "Scallop operations require secretKey in SDK options. Pass { secretKey: 'suiprivkey...' } to DefiDashSDK constructor.",
+      };
+    }
+
     try {
-      // Resolve coin type and amounts
       const coinType = this.resolveCoinType(params.depositAsset);
-      const reserve = getReserveByCoinType(coinType);
-      const decimals = reserve?.decimals || 9;
-      const symbol = coinType.split("::").pop()?.toUpperCase() || "SUI";
-      const isSui = coinType.endsWith("::sui::SUI");
 
-      // Get coin name for Scallop (e.g., "sui", "usdc")
-      const coinName = this.getScallopCoinName(coinType);
-
-      // Calculate deposit amount
-      let depositAmountStr: string;
-      if (params.depositValueUsd) {
-        const price = await getTokenPrice(coinType);
-        depositAmountStr = (params.depositValueUsd / price).toFixed(decimals);
-      } else {
-        depositAmountStr = params.depositAmount!;
-      }
-      const depositAmountRaw = parseUnits(depositAmountStr, decimals);
-      const depositAmountHuman = parseFloat(depositAmountStr);
-
-      // Calculate flash loan amount
-      const depositPrice = await getTokenPrice(coinType);
-      const initialEquityUsd = depositAmountHuman * depositPrice;
-      const flashLoanUsd = initialEquityUsd * (params.multiplier - 1);
-      const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6));
-
-      const flashLoanFee = ScallopFlashLoanClient.calculateFee(flashLoanUsdc);
-      const repaymentAmount = flashLoanUsdc + flashLoanFee;
-      const borrowFeeBuffer = 1.003;
-      const borrowAmount = BigInt(
-        Math.ceil(Number(repaymentAmount) * borrowFeeBuffer),
-      );
-
-      // Initialize Scallop SDK with secret key
-      // Scallop SDK requires the original secret key string (not extracted from keypair)
-      if (!this.options.secretKey) {
-        return {
-          success: false,
-          error:
-            "Scallop operations require secretKey in SDK options. Pass { secretKey: 'suiprivkey...' } to DefiDashSDK constructor.",
-        };
-      }
-
-      const scallop = new Scallop({
-        secretKey: this.options.secretKey,
-        networkType: "mainnet",
-      });
-      await scallop.init();
-
-      const builder = await scallop.createScallopBuilder();
-      const client = await scallop.createScallopClient();
-      const tx = builder.createTxBlock();
-      tx.setSender(this.userAddress);
-
-      // Check for existing obligation
-      const existingObligations = await client.getObligations();
-      const hasExistingObligation = existingObligations.length > 0;
-      let existingObligationId: string | null = null;
-      let existingObligationKeyId: string | null = null;
-      let isCurrentlyLocked = false;
-
-      if (hasExistingObligation) {
-        existingObligationId = existingObligations[0].id;
-        existingObligationKeyId = existingObligations[0].keyId;
-        isCurrentlyLocked = existingObligations[0].locked;
-      }
-
-      // Get swap quote
-      const swapQuotes = await this.swapClient.quote({
-        amountIn: flashLoanUsdc.toString(),
-        coinTypeIn: COIN_TYPES.USDC,
-        coinTypeOut: coinType,
-      });
-
-      if (swapQuotes.length === 0) {
-        return { success: false, error: `No swap quotes for USDC → ${symbol}` };
-      }
-
-      const bestQuote = swapQuotes.sort(
-        (a, b) => Number(b.amountOut) - Number(a.amountOut),
-      )[0];
-
-      // Build transaction using Scallop SDK
-      // Step 1: Flash loan USDC
-      const [loanCoin, receipt] = await tx.borrowFlashLoan(
-        Number(flashLoanUsdc),
-        "usdc",
-      );
-
-      // Step 2: Swap USDC → deposit asset
-      const swappedAsset = await this.swapClient.swap(
+      const { tx, builder } = await buildScallopLeverageTransaction(
         {
-          quote: bestQuote,
-          signer: this.userAddress,
-          coinIn: loanCoin,
-          tx: tx.txBlock,
-        },
-        100,
-      );
-
-      // Step 3: Prepare deposit coin
-      let depositCoin: any;
-      if (isSui) {
-        const [userDeposit] = tx.splitSUIFromGas([Number(depositAmountRaw)]);
-        tx.mergeCoins(userDeposit, [swappedAsset]);
-        depositCoin = userDeposit;
-      } else {
-        const userCoins = await this.suiClient.getCoins({
-          owner: this.userAddress,
           coinType,
-        });
-
-        if (userCoins.data.length === 0) {
-          return { success: false, error: `No ${symbol} coins in wallet` };
-        }
-
-        const primaryCoin = tx.txBlock.object(userCoins.data[0].coinObjectId);
-        if (userCoins.data.length > 1) {
-          const otherCoins = userCoins.data
-            .slice(1)
-            .map((c) => tx.txBlock.object(c.coinObjectId));
-          tx.mergeCoins(primaryCoin, otherCoins);
-        }
-
-        const [userContribution] = tx.splitCoins(primaryCoin, [
-          Number(depositAmountRaw),
-        ]);
-        tx.mergeCoins(userContribution, [swappedAsset]);
-        depositCoin = userContribution;
-      }
-
-      // Step 4: Handle obligation
-      let obligation: any;
-      let obligationKey: any;
-      let obligationHotPotato: any;
-      let isNewObligation = false;
-
-      if (
-        hasExistingObligation &&
-        existingObligationId &&
-        existingObligationKeyId
-      ) {
-        obligation = tx.txBlock.object(existingObligationId);
-        obligationKey = tx.txBlock.object(existingObligationKeyId);
-
-        if (isCurrentlyLocked) {
-          tx.unstakeObligation(obligation, obligationKey);
-        }
-
-        tx.addCollateral(obligation, depositCoin, coinName);
-      } else {
-        [obligation, obligationKey, obligationHotPotato] = tx.openObligation();
-        tx.addCollateral(obligation, depositCoin, coinName);
-        isNewObligation = true;
-      }
-
-      // Step 5: Update oracles (critical for Scallop!)
-      await tx.updateAssetPricesQuick([coinName, "usdc"]);
-
-      // Step 6: Borrow USDC
-      const borrowedUsdc = tx.borrow(
-        obligation,
-        obligationKey,
-        Number(borrowAmount),
-        "usdc",
+          depositAmount: params.depositAmount,
+          depositValueUsd: params.depositValueUsd,
+          multiplier: params.multiplier,
+          userAddress: this.userAddress,
+          secretKey: this.options.secretKey,
+        },
+        {
+          suiClient: this.suiClient,
+          swapClient: this.swapClient,
+        },
       );
 
-      // Step 7: Repay flash loan
-      await tx.repayFlashLoan(borrowedUsdc, receipt, "usdc");
-
-      // Step 8: Finalize
-      if (isNewObligation) {
-        tx.returnObligation(obligation, obligationHotPotato);
-        tx.stakeObligation(obligation, obligationKey);
-        tx.transferObjects([obligationKey], this.userAddress);
-      } else {
-        tx.stakeObligation(obligation, obligationKey);
-      }
-
-      // Execute
+      // Dry run
       if (params.dryRun) {
         tx.txBlock.setGasBudget(DRYRUN_GAS_BUDGET);
         const dryRunResult = await this.suiClient.dryRunTransactionBlock({
@@ -1371,7 +938,7 @@ export class DefiDashSDK {
         };
       }
 
-      // For real execution, do dryrun first to optimize gas
+      // Real execution: dryrun first to optimize gas
       tx.txBlock.setGasBudget(DRYRUN_GAS_BUDGET);
       const dryRunResult = await this.suiClient.dryRunTransactionBlock({
         transactionBlock: await tx.txBlock.build({ client: this.suiClient }),
@@ -1390,7 +957,6 @@ export class DefiDashSDK {
 
       const result = await builder.signAndSendTxBlock(tx);
 
-      // Fetch transaction details to get actual gas used
       const txDetails = await this.suiClient.waitForTransaction({
         digest: result.digest,
         options: { showEffects: true },
@@ -1411,27 +977,5 @@ export class DefiDashSDK {
         error: error.message || String(error),
       };
     }
-  }
-
-  /**
-   * Get Scallop coin name from coin type
-   */
-  private getScallopCoinName(coinType: string): string {
-    const normalized = normalizeCoinType(coinType);
-    const COIN_NAME_MAP: Record<string, string> = {
-      "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI":
-        "sui",
-      "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC":
-        "usdc",
-      "0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN":
-        "wusdc",
-      "0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN":
-        "wusdt",
-    };
-    return (
-      COIN_NAME_MAP[normalized] ||
-      normalized.split("::").pop()?.toLowerCase() ||
-      "sui"
-    );
   }
 }

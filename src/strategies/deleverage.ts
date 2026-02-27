@@ -10,6 +10,7 @@ import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
 import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
 import { ILendingProtocol, USDC_COIN_TYPE, PositionInfo } from "../types";
 import { ScallopFlashLoanClient } from "../protocols/scallop/flash-loan";
+import { findBestSwapQuote } from "./common";
 
 export interface DeleverageBuildParams {
   protocol: ILendingProtocol;
@@ -135,19 +136,13 @@ async function buildScallopDeleverageTransaction(
   });
 
   // Step 4: Get swap quote and swap
-  const swapQuotes = await swapClient.quote({
-    amountIn: estimate.swapAmount.toString(),
-    coinTypeIn: supplyCoinType,
-    coinTypeOut: USDC_COIN_TYPE,
-  });
-
-  if (swapQuotes.length === 0) {
-    throw new Error(`No swap quotes for ${position.collateral.symbol} → USDC`);
-  }
-
-  const bestQuote = swapQuotes.sort(
-    (a, b) => Number(b.amountOut) - Number(a.amountOut),
-  )[0];
+  const { quote: bestQuote } = await findBestSwapQuote(
+    swapClient,
+    estimate.swapAmount.toString(),
+    supplyCoinType,
+    USDC_COIN_TYPE,
+    `${position.collateral.symbol} \u2192 USDC`,
+  );
 
   // Split coin for swap
   const [coinToSwap] = tx.splitCoins(withdrawnCoin, [estimate.swapAmount]);
@@ -312,26 +307,20 @@ export async function buildDeleverageTransaction(
   );
 
   // 5. Get swap quote and swap
-  const swapQuotes = await swapClient.quote({
-    amountIn: estimate.swapAmount.toString(),
-    coinTypeIn: supplyCoinType,
-    coinTypeOut: USDC_COIN_TYPE,
-  });
-
-  if (swapQuotes.length === 0) {
-    throw new Error(`No swap quotes for ${position.collateral.symbol} → USDC`);
-  }
-
-  const bestQuote = swapQuotes.sort(
-    (a, b) => Number(b.amountOut) - Number(a.amountOut),
-  )[0];
+  const { quote: bestQuote2 } = await findBestSwapQuote(
+    swapClient,
+    estimate.swapAmount.toString(),
+    supplyCoinType,
+    USDC_COIN_TYPE,
+    `${position.collateral.symbol} \u2192 USDC`,
+  );
 
   // Split coin for swap
   const [coinToSwap] = tx.splitCoins(withdrawnCoin, [estimate.swapAmount]);
 
   const swappedUsdc = await swapClient.swap(
     {
-      quote: bestQuote,
+      quote: bestQuote2,
       signer: userAddress,
       coinIn: coinToSwap,
       tx: tx,

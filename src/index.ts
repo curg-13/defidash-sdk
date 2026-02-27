@@ -72,6 +72,12 @@ export {
   calculateLeveragePreview,
   buildDeleverageTransaction,
   calculateDeleverageEstimate,
+  previewLeverage,
+  findBestLeverageRoute,
+  buildScallopLeverageTransaction,
+  getScallopCoinName,
+  computeLeverageAmounts,
+  findBestSwapQuote,
 } from "./strategies";
 
 // Utilities
