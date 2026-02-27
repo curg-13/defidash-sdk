@@ -24,6 +24,10 @@ import {
   BrowserLeverageParams,
   BrowserDeleverageParams,
   COIN_TYPES,
+  LEVERAGE_MULTIPLIER_BUFFER,
+  FindBestRouteParams,
+  LeverageRoute,
+  LeverageRouteResult,
 } from "./types";
 
 import { Scallop } from "@scallop-io/sui-scallop-sdk";
@@ -715,7 +719,7 @@ export class DefiDashSDK {
 
     // Calculate flash loan amount = Initial Equity * (Multiplier - 1)
     const flashLoanUsd = initialEquityUsd * (params.multiplier - 1);
-    const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6 * 1.02)); // 2% buffer
+    const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6));
 
     // Flash loan fee: query actual rate on-chain from Scallop FLASHLOAN_FEES_TABLE
     // Leverage loop always borrows USDC via flash loan
@@ -828,6 +832,177 @@ export class DefiDashSDK {
       netApy,
       annualNetEarningsUsd,
       swapSlippagePct,
+    };
+  }
+
+  // ============================================================================
+  // Route Finding
+  // ============================================================================
+
+  /**
+   * Find the best leverage route across all initialized protocols for a given asset.
+   *
+   * Returns two recommendations:
+   * 1. **bestMaxMultiplier** — the protocol offering the highest possible leverage
+   * 2. **bestApy** — the protocol with the highest net APY at a safe multiplier
+   *
+   * The safe multiplier = min(maxMultiplier across protocols) - LEVERAGE_MULTIPLIER_BUFFER
+   *
+   * @example
+   * ```typescript
+   * const route = await sdk.findBestLeverageRoute({
+   *   depositAsset: 'SUI',
+   *   depositValueUsd: 100,
+   * });
+   *
+   * console.log(route.bestMaxMultiplier.protocol); // e.g. 'scallop'
+   * console.log(route.bestApy.protocol);           // e.g. 'suilend'
+   * console.log(route.safeMultiplier);             // e.g. 2.83
+   * ```
+   */
+  async findBestLeverageRoute(
+    params: FindBestRouteParams,
+  ): Promise<LeverageRouteResult> {
+    this.ensureInitialized();
+
+    // Validate input
+    if (!params.depositAmount && !params.depositValueUsd) {
+      throw new InvalidParameterError(
+        "Either depositAmount or depositValueUsd must be provided",
+      );
+    }
+    if (params.depositAmount && params.depositValueUsd) {
+      throw new InvalidParameterError(
+        "Cannot provide both depositAmount and depositValueUsd. Choose one.",
+      );
+    }
+
+    const coinType = this.resolveCoinType(params.depositAsset);
+    const allProtocols = Array.from(this.protocols.keys());
+
+    // Phase 1: Get risk params from all protocols in parallel (lightweight)
+    const riskResults = await Promise.allSettled(
+      allProtocols.map((protocol) =>
+        this.protocols
+          .get(protocol)!
+          .getAssetRiskParams(coinType)
+          .then((riskParams) => ({ protocol, riskParams })),
+      ),
+    );
+
+    type RiskEntry = {
+      protocol: LendingProtocol;
+      riskParams: { maxMultiplier: number; ltv: number };
+    };
+    const successfulRisk: RiskEntry[] = [];
+    const failedProtocols: Array<{
+      protocol: LendingProtocol;
+      error: string;
+    }> = [];
+
+    riskResults.forEach((result, i) => {
+      if (result.status === "fulfilled") {
+        successfulRisk.push(result.value);
+      } else {
+        failedProtocols.push({
+          protocol: allProtocols[i],
+          error: result.reason?.message || String(result.reason),
+        });
+      }
+    });
+
+    if (successfulRisk.length === 0) {
+      throw new InvalidParameterError(
+        `No protocol supports asset "${params.depositAsset}" for leverage. ` +
+          `Errors: ${failedProtocols.map((f) => `${f.protocol}: ${f.error}`).join("; ")}`,
+      );
+    }
+
+    // Calculate safe multiplier = min(maxMultipliers) - buffer, floor at 1.1
+    const minMaxMultiplier = Math.min(
+      ...successfulRisk.map((r) => r.riskParams.maxMultiplier),
+    );
+    const safeMultiplier = Math.max(
+      1.1,
+      minMaxMultiplier - LEVERAGE_MULTIPLIER_BUFFER,
+    );
+
+    // Best max multiplier protocol
+    const bestMaxEntry = successfulRisk.reduce((best, curr) =>
+      curr.riskParams.maxMultiplier > best.riskParams.maxMultiplier
+        ? curr
+        : best,
+    );
+
+    // Phase 2: Call previewLeverage at safeMultiplier for all protocols + at near-max for best
+    const maxMultPreviewPromise = this.previewLeverage({
+      protocol: bestMaxEntry.protocol,
+      depositAsset: params.depositAsset,
+      depositAmount: params.depositAmount,
+      depositValueUsd: params.depositValueUsd,
+      multiplier:
+        Math.round((bestMaxEntry.riskParams.maxMultiplier - 0.01) * 100) / 100,
+    });
+
+    const safePreviewResults = await Promise.allSettled(
+      successfulRisk.map(({ protocol }) =>
+        this.previewLeverage({
+          protocol,
+          depositAsset: params.depositAsset,
+          depositAmount: params.depositAmount,
+          depositValueUsd: params.depositValueUsd,
+          multiplier: safeMultiplier,
+        }).then((preview) => ({ protocol, preview })),
+      ),
+    );
+
+    type PreviewEntry = {
+      protocol: LendingProtocol;
+      preview: LeveragePreview;
+    };
+    const safeSuccessful: PreviewEntry[] = [];
+
+    safePreviewResults.forEach((result, i) => {
+      if (result.status === "fulfilled") {
+        safeSuccessful.push(result.value);
+      } else {
+        failedProtocols.push({
+          protocol: successfulRisk[i].protocol,
+          error: `Failed at safe multiplier ${safeMultiplier}x: ${result.reason?.message}`,
+        });
+      }
+    });
+
+    if (safeSuccessful.length === 0) {
+      throw new InvalidParameterError(
+        `No protocol could preview at safe multiplier ${safeMultiplier}x for "${params.depositAsset}"`,
+      );
+    }
+
+    // Best APY = highest netApy among safe previews
+    const bestApyEntry = safeSuccessful.reduce((best, curr) =>
+      curr.preview.netApy > best.preview.netApy ? curr : best,
+    );
+
+    // Await the max multiplier preview
+    const maxMultPreview = await maxMultPreviewPromise;
+
+    return {
+      bestMaxMultiplier: {
+        protocol: bestMaxEntry.protocol,
+        multiplier:
+          Math.round((bestMaxEntry.riskParams.maxMultiplier - 0.01) * 100) /
+          100,
+        preview: maxMultPreview,
+      },
+      bestApy: {
+        protocol: bestApyEntry.protocol,
+        multiplier: safeMultiplier,
+        preview: bestApyEntry.preview,
+      },
+      safeMultiplier,
+      allPreviews: safeSuccessful,
+      failedProtocols,
     };
   }
 
@@ -1023,7 +1198,7 @@ export class DefiDashSDK {
       const depositPrice = await getTokenPrice(coinType);
       const initialEquityUsd = depositAmountHuman * depositPrice;
       const flashLoanUsd = initialEquityUsd * (params.multiplier - 1);
-      const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6 * 1.02));
+      const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6));
 
       const flashLoanFee = ScallopFlashLoanClient.calculateFee(flashLoanUsdc);
       const repaymentAmount = flashLoanUsdc + flashLoanFee;

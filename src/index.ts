@@ -45,6 +45,9 @@ export {
   type DeleverageParams,
   type StrategyResult,
   type LeveragePreview,
+  type FindBestRouteParams,
+  type LeverageRoute,
+  type LeverageRouteResult,
 
   // Config types
   type SDKOptions,
@@ -60,6 +63,7 @@ export {
   SUI_COIN_TYPE,
   DEFAULT_7K_PARTNER,
   COIN_TYPES,
+  LEVERAGE_MULTIPLIER_BUFFER,
 } from "./types";
 
 // Strategy Builders (for advanced usage)

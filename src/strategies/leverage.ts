@@ -90,7 +90,7 @@ export async function calculateLeveragePreview(params: {
 
   // Flash loan amount = Initial Equity * (Multiplier - 1)
   const flashLoanUsd = initialEquityUsd * (multiplier - 1);
-  const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6 * 1.02)); // 2% buffer
+  const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6));
 
   const SCALLOP_FLASH_LOAN_FEE_RATE = 0.0005; // 0.05% = 5 basis points
   const flashLoanFeeUsd =

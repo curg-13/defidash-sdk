@@ -22,6 +22,9 @@ export type {
   DeleverageParams,
   StrategyResult,
   LeveragePreview,
+  FindBestRouteParams,
+  LeverageRoute,
+  LeverageRouteResult,
 } from "./strategy";
 
 // Configuration types
@@ -40,6 +43,7 @@ export {
   COIN_DECIMALS,
   UNSUPPORTED_COIN_TYPES,
   SUPPORTED_COIN_TYPES,
+  LEVERAGE_MULTIPLIER_BUFFER,
 } from "./constants";
 
 // Protocol interface and types

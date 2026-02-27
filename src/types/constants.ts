@@ -125,3 +125,12 @@ export const SUI_COIN_TYPE = COIN_TYPES.SUI;
  */
 export const DEFAULT_7K_PARTNER =
   '0x0cffa6f207ef1f08ff2b55d3a0ec79ec2baec55ce0eb3cfc56a48a452ba65427';
+
+/**
+ * Safety buffer subtracted from the minimum maxMultiplier across protocols
+ * when calculating the "safe" comparison multiplier for APY ranking.
+ *
+ * Example: if min maxMultiplier across protocols is 2.5x,
+ * the safe multiplier used for APY comparison = 2.5 - 0.5 = 2.0x
+ */
+export const LEVERAGE_MULTIPLIER_BUFFER = 0.5;
