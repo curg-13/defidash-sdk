@@ -17,6 +17,7 @@ import {
 import { ScallopFlashLoanClient } from "../protocols/scallop/flash-loan";
 import { normalizeCoinType } from "../utils";
 import { getReserveByCoinType } from "../protocols/suilend/constants";
+import { findBestSwapQuote } from "./common";
 
 export interface LeverageBuildParams {
   protocol: ILendingProtocol;
@@ -234,21 +235,13 @@ export async function buildLeverageTransaction(
 
   // 2. Swap USDC → deposit asset
   // Note: Stablecoins are already rejected above, so swap is always needed
-  const swapQuotes = await swapClient.quote({
-    amountIn: flashLoanUsdc.toString(),
-    coinTypeIn: USDC_COIN_TYPE,
-    coinTypeOut: normalized,
-  });
-
-  if (swapQuotes.length === 0) {
-    throw new Error(
-      `No swap quotes found for USDC → ${reserve?.symbol ?? normalized}`,
-    );
-  }
-
-  const bestQuote = swapQuotes.sort(
-    (a, b) => Number(b.amountOut) - Number(a.amountOut),
-  )[0];
+  const { quote: bestQuote } = await findBestSwapQuote(
+    swapClient,
+    flashLoanUsdc.toString(),
+    USDC_COIN_TYPE,
+    normalized,
+    `USDC \u2192 ${reserve?.symbol ?? normalized}`,
+  );
 
   // TODO: Make slippage configurable via leverage params
   const SLIPPAGE_BPS = 100; // 1%
