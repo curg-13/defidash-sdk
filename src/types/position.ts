@@ -28,13 +28,19 @@ export interface AssetPosition {
  * Current lending position information
  */
 export interface PositionInfo {
-  /** Collateral (supply) position */
+  /** Primary collateral — largest supply by USD value */
   collateral: AssetPosition;
 
-  /** Debt (borrow) position */
+  /** Primary debt — largest borrow by USD value */
   debt: AssetPosition;
 
-  /** Net value in USD (collateral - debt) */
+  /** All supply positions (includes dust) */
+  supplies: AssetPosition[];
+
+  /** All borrow positions */
+  borrows: AssetPosition[];
+
+  /** Net value in USD (total supplies - total borrows) */
   netValueUsd: number;
 
   /** Health factor (> 1 is safe, < 1 is liquidatable) */

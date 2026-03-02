@@ -16,14 +16,6 @@ export interface SDKOptions {
 
   /** 7k Protocol partner address (optional) */
   swapPartner?: string;
-
-  /**
-   * Secret key for Scallop SDK (optional)
-   *
-   * Required for Scallop leverage/deleverage operations.
-   * Can be in bech32 format (suiprivkey...) or base64.
-   */
-  secretKey?: string;
 }
 
 /**

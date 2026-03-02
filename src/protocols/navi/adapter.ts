@@ -94,9 +94,9 @@ export class NaviAdapter implements ILendingProtocol {
 
     if (activePositions.length === 0) return null;
 
-    // Find supply position
-    let collateral: AssetPosition | null = null;
-    let debt: AssetPosition | null = null;
+    // Build all supply and borrow positions
+    const supplies: AssetPosition[] = [];
+    const allBorrows: AssetPosition[] = [];
 
     for (const pos of activePositions) {
       const poolCoinType = normalizeCoinType(pos.pool.coinType);
@@ -107,14 +107,14 @@ export class NaviAdapter implements ILendingProtocol {
       if (BigInt(pos.supplyBalance) > 0) {
         const amount = BigInt(pos.supplyBalance);
         const price = await getTokenPrice(poolCoinType);
-        collateral = {
+        supplies.push({
           amount,
           symbol,
           coinType: poolCoinType,
           decimals: NAVI_BALANCE_DECIMALS, // Navi uses 9 decimals internally
           valueUsd:
             (Number(amount) / Math.pow(10, NAVI_BALANCE_DECIMALS)) * price,
-        };
+        });
       }
 
       if (BigInt(pos.borrowBalance) > 0) {
@@ -123,19 +123,26 @@ export class NaviAdapter implements ILendingProtocol {
         const amount =
           rawAmount / BigInt(10 ** (NAVI_BALANCE_DECIMALS - decimals));
         const price = await getTokenPrice(poolCoinType);
-        debt = {
+        allBorrows.push({
           amount,
           symbol,
           coinType: poolCoinType,
           decimals,
           valueUsd: (Number(amount) / Math.pow(10, decimals)) * price,
-        };
+        });
       }
     }
 
+    // Primary = largest by USD value
+    const collateral = [...supplies].sort((a, b) => b.valueUsd - a.valueUsd)[0] ?? null;
     if (!collateral) return null;
 
-    const netValueUsd = collateral.valueUsd - (debt?.valueUsd || 0);
+    const debt = allBorrows.length > 0
+      ? [...allBorrows].sort((a, b) => b.valueUsd - a.valueUsd)[0]
+      : null;
+
+    const totalSupplyUsd = supplies.reduce((s, p) => s + p.valueUsd, 0);
+    const totalDebtUsd = allBorrows.reduce((s, p) => s + p.valueUsd, 0);
 
     return {
       collateral,
@@ -146,7 +153,9 @@ export class NaviAdapter implements ILendingProtocol {
         decimals: 6,
         valueUsd: 0,
       },
-      netValueUsd,
+      supplies,
+      borrows: allBorrows,
+      netValueUsd: totalSupplyUsd - totalDebtUsd,
     };
   }
 
@@ -234,13 +243,17 @@ export class NaviAdapter implements ILendingProtocol {
   async refreshOracles(
     tx: Transaction,
     coinTypes: string[],
-    userAddress: string,
+    _userAddress: string,
   ): Promise<void> {
     this.ensureInitialized();
 
-    const feedsToUpdate = coinTypes
-      .map((ct) => this.getPriceFeed(ct))
-      .filter(Boolean);
+    // Navi's calculator::calculate_value requires ALL pool oracles to be fresh,
+    // not just the assets being operated on. Refresh all available feeds to avoid
+    // abort 1502 during withdraw/borrow health factor checks.
+    const feedsToUpdate =
+      this.priceFeeds.length > 0 ? this.priceFeeds : coinTypes
+        .map((ct) => this.getPriceFeed(ct))
+        .filter(Boolean);
 
     if (feedsToUpdate.length > 0) {
       await updateOraclePricesPTB(tx as any, feedsToUpdate, {

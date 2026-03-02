@@ -96,84 +96,55 @@ export class SuilendAdapter implements ILendingProtocol {
 
     if (deposits.length === 0 && borrows.length === 0) return null;
 
-    // Find largest deposit by USD value as collateral
-    let collateral: AssetPosition | null = null;
-    if (deposits.length > 0) {
-      // Calculate USD value for each deposit to find the largest
-      const depositsWithValue = await Promise.all(
-        deposits.map(async (deposit: any) => {
-          const coinType = normalizeCoinType(deposit.coinType.name);
-          const reserve = getReserveByCoinType(coinType);
-          const amount = BigInt(deposit.depositedCtokenAmount);
-          const price = await getTokenPrice(coinType);
-          const decimals = reserve?.decimals || 9;
-          const valueUsd = (Number(amount) / Math.pow(10, decimals)) * price;
-          return {
-            deposit,
-            coinType,
-            reserve,
-            amount,
-            price,
-            decimals,
-            valueUsd,
-          };
-        }),
-      );
+    // Build all supply positions
+    const supplies: AssetPosition[] = await Promise.all(
+      deposits.map(async (deposit: any) => {
+        const coinType = normalizeCoinType(deposit.coinType.name);
+        const reserve = getReserveByCoinType(coinType);
+        const amount = BigInt(deposit.depositedCtokenAmount);
+        const price = await getTokenPrice(coinType);
+        const decimals = reserve?.decimals || 9;
+        const valueUsd = (Number(amount) / Math.pow(10, decimals)) * price;
+        return {
+          amount,
+          symbol: reserve?.symbol || "???",
+          coinType,
+          decimals,
+          valueUsd,
+        };
+      }),
+    );
 
-      // Sort by USD value descending and take the largest
-      depositsWithValue.sort((a, b) => b.valueUsd - a.valueUsd);
-      const largest = depositsWithValue[0];
+    // Build all borrow positions
+    const allBorrows: AssetPosition[] = await Promise.all(
+      borrows.map(async (borrow: any) => {
+        const coinType = normalizeCoinType(borrow.coinType.name);
+        const reserve = getReserveByCoinType(coinType);
+        const rawAmount = BigInt(borrow.borrowedAmount.value);
+        const amount = rawAmount / WAD;
+        const price = await getTokenPrice(coinType);
+        const decimals = reserve?.decimals || 6;
+        const valueUsd = (Number(amount) / Math.pow(10, decimals)) * price;
+        return {
+          amount,
+          symbol: reserve?.symbol || "USDC",
+          coinType,
+          decimals,
+          valueUsd,
+        };
+      }),
+    );
 
-      collateral = {
-        amount: largest.amount,
-        symbol: largest.reserve?.symbol || "???",
-        coinType: largest.coinType,
-        decimals: largest.decimals,
-        valueUsd: largest.valueUsd,
-      };
-    }
-
-    // Find largest borrow by USD value as debt
-    let debt: AssetPosition | null = null;
-    if (borrows.length > 0) {
-      // Calculate USD value for each borrow to find the largest
-      const borrowsWithValue = await Promise.all(
-        borrows.map(async (borrow: any) => {
-          const coinType = normalizeCoinType(borrow.coinType.name);
-          const reserve = getReserveByCoinType(coinType);
-          const rawAmount = BigInt(borrow.borrowedAmount.value);
-          const amount = rawAmount / WAD;
-          const price = await getTokenPrice(coinType);
-          const decimals = reserve?.decimals || 6;
-          const valueUsd = (Number(amount) / Math.pow(10, decimals)) * price;
-          return {
-            borrow,
-            coinType,
-            reserve,
-            amount,
-            price,
-            decimals,
-            valueUsd,
-          };
-        }),
-      );
-
-      // Sort by USD value descending and take the largest
-      borrowsWithValue.sort((a, b) => b.valueUsd - a.valueUsd);
-      const largest = borrowsWithValue[0];
-
-      debt = {
-        amount: largest.amount,
-        symbol: largest.reserve?.symbol || "USDC",
-        coinType: largest.coinType,
-        decimals: largest.decimals,
-        valueUsd: largest.valueUsd,
-      };
-    }
-
+    // Primary = largest by USD value
+    const collateral = [...supplies].sort((a, b) => b.valueUsd - a.valueUsd)[0] ?? null;
     if (!collateral) return null;
 
-    const netValueUsd = collateral.valueUsd - (debt?.valueUsd || 0);
+    const debt = allBorrows.length > 0
+      ? [...allBorrows].sort((a, b) => b.valueUsd - a.valueUsd)[0]
+      : null;
+
+    const totalSupplyUsd = supplies.reduce((s, p) => s + p.valueUsd, 0);
+    const totalDebtUsd = allBorrows.reduce((s, p) => s + p.valueUsd, 0);
 
     return {
       collateral,
@@ -184,7 +155,9 @@ export class SuilendAdapter implements ILendingProtocol {
         decimals: 6,
         valueUsd: 0,
       },
-      netValueUsd,
+      supplies,
+      borrows: allBorrows,
+      netValueUsd: totalSupplyUsd - totalDebtUsd,
     };
   }
 
@@ -323,9 +296,30 @@ export class SuilendAdapter implements ILendingProtocol {
         [LENDING_MARKET_TYPE],
         this.suiClient,
       );
-      await this.client.refreshAll(tx, obligation, coinTypes);
+
+      // Filter out coinTypes already in the obligation to avoid duplicate
+      // Pyth VAA submissions. Suilend SDK's refreshAll uses a Map keyed by
+      // reserveArrayIndex, but obligation entries use string keys while
+      // findReserveArrayIndex returns BigInt — causing the same reserve to
+      // appear twice and triggering dynamic_field::add abort.
+      const existingCoinTypes = new Set<string>();
+      (obligation?.deposits ?? []).forEach((d: any) =>
+        existingCoinTypes.add(normalizeCoinType(d.coinType.name)),
+      );
+      (obligation?.borrows ?? []).forEach((b: any) =>
+        existingCoinTypes.add(normalizeCoinType(b.coinType.name)),
+      );
+
+      const newCoinTypes = coinTypes.filter(
+        (ct) => !existingCoinTypes.has(normalizeCoinType(ct)),
+      );
+
+      await this.client.refreshAll(
+        tx,
+        obligation,
+        newCoinTypes.length > 0 ? newCoinTypes : undefined,
+      );
     } else {
-      // For new obligations, just refresh reserves
       await this.client.refreshAll(tx, undefined, coinTypes);
     }
   }

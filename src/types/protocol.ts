@@ -196,3 +196,47 @@ export interface ILendingProtocol {
    */
   getAssetApy(coinType: string): Promise<AssetApy>;
 }
+
+/**
+ * Extended protocol interface for Scallop-specific operations.
+ *
+ * Used in deleverage flows that require direct moveCall access
+ * to Scallop's on-chain modules (obligation management, staking).
+ */
+export interface IScallopProtocol extends ILendingProtocol {
+  /** Get Scallop on-chain addresses (core, borrowIncentive, vesca) */
+  getAddresses(): {
+    core: {
+      protocolPkg: string;
+      version: string;
+      market: string;
+      coinDecimalsRegistry: string;
+      xOracle: string;
+    };
+    borrowIncentive: {
+      pkg: string;
+      config: string;
+      incentivePools: string;
+      incentiveAccounts: string;
+    };
+    vesca: {
+      subsTable: string;
+      subsWhitelist: string;
+    };
+  };
+
+  /** Get user's Scallop obligations */
+  getObligations(userAddress: string): Promise<
+    Array<{
+      id: string;
+      keyId: string;
+      locked: boolean;
+    }>
+  >;
+
+  /** Clear pending state (e.g., unstaked obligations) */
+  clearPendingState(): void;
+
+  /** Unstake an obligation in a transaction */
+  unstakeObligation(tx: Transaction, obligationId: string, obligationKeyId: string): void;
+}

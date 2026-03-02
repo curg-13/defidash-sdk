@@ -10,14 +10,11 @@ import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
 import {
   ILendingProtocol,
   USDC_COIN_TYPE,
-  LeveragePreview,
   UNSUPPORTED_COIN_TYPES,
-  COIN_DECIMALS,
 } from "../types";
 import { ScallopFlashLoanClient } from "../protocols/scallop/flash-loan";
-import { normalizeCoinType } from "../utils";
-import { getReserveByCoinType } from "../protocols/suilend/constants";
-import { findBestSwapQuote } from "./common";
+import { normalizeCoinType, getDecimals } from "../utils";
+import { findBestSwapQuote, BORROW_FEE_BUFFER } from "./common";
 
 export interface LeverageBuildParams {
   protocol: ILendingProtocol;
@@ -31,114 +28,15 @@ export interface LeverageBuildParams {
 }
 
 /**
- * Calculate leverage position preview without executing
- *
- * Computes expected position metrics including flash loan amount,
- * total position value, LTV, and liquidation parameters.
- *
- * @param params - Preview calculation parameters
- * @param params.depositCoinType - Full coin type of deposit asset
- * @param params.depositAmount - Deposit amount in raw units (bigint)
- * @param params.multiplier - Target leverage multiplier (e.g., 2.0 for 2x)
- *
- * @returns Preview containing position metrics and risk parameters
- *
- * @example
- * ```typescript
- * const preview = await calculateLeveragePreview({
- *   depositCoinType: '0x2::sui::SUI',
- *   depositAmount: 1000000000n,  // 1 SUI
- *   multiplier: 2.0
- * });
- *
- * console.log(`Flash loan needed: ${preview.flashLoanUsdc / 1e6} USDC`);
- * console.log(`Total position: $${preview.totalPositionUsd}`);
- * console.log(`LTV: ${preview.ltvPercent}%`);
- * ```
- *
- * @remarks
- * - Fetches current market prices from 7k Protocol
- * - Assumes 60% LTV threshold for liquidation calculations
- * - Adds 2% buffer to flash loan amount for safety
- *
- * @note This function is intentionally placed here as it's tightly coupled
- * with the leverage strategy logic. Consider moving to a separate preview
- * module if reuse across strategies is needed.
- */
-export async function calculateLeveragePreview(params: {
-  depositCoinType: string;
-  depositAmount: bigint;
-  multiplier: number;
-  /** Optional LTV from protocol (0-1). Default: 0.6 */
-  ltv?: number;
-  /** Optional liquidation threshold from protocol (0-1). Default: 0.65 */
-  liquidationThreshold?: number;
-}): Promise<LeveragePreview> {
-  const { depositCoinType, depositAmount, multiplier } = params;
-
-  // Use protocol values if provided, otherwise use conservative defaults
-  const ltv = params.ltv ?? 0.6;
-  const liquidationThreshold = params.liquidationThreshold ?? 0.65;
-  const maxMultiplier = ltv > 0 && ltv < 1 ? 1 / (1 - ltv) : 1;
-
-  const normalized = normalizeCoinType(depositCoinType);
-  const reserve = getReserveByCoinType(normalized);
-  const decimals = reserve?.decimals || 8;
-
-  const depositPrice = await getTokenPrice(normalized);
-  const depositAmountHuman = Number(depositAmount) / Math.pow(10, decimals);
-  const initialEquityUsd = depositAmountHuman * depositPrice;
-
-  // Flash loan amount = Initial Equity * (Multiplier - 1)
-  const flashLoanUsd = initialEquityUsd * (multiplier - 1);
-  const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6));
-
-  const SCALLOP_FLASH_LOAN_FEE_RATE = 0.0005; // 0.05% = 5 basis points
-  const flashLoanFeeUsd =
-    (Number(flashLoanUsdc) / 1e6) * SCALLOP_FLASH_LOAN_FEE_RATE;
-
-  const totalPositionUsd = initialEquityUsd * multiplier;
-  const debtUsd = flashLoanUsd + flashLoanFeeUsd;
-  const ltvPercent = (debtUsd / totalPositionUsd) * 100;
-
-  // Calculate liquidation price using liquidation threshold
-  const totalCollateralAmount = depositAmountHuman * multiplier;
-  const liquidationPrice =
-    debtUsd / (totalCollateralAmount * liquidationThreshold);
-  const priceDropBuffer = (1 - liquidationPrice / depositPrice) * 100;
-
-  return {
-    initialEquityUsd,
-    flashLoanUsdc,
-    flashLoanFeeUsd,
-    totalPositionUsd,
-    debtUsd,
-    effectiveMultiplier: multiplier,
-    maxMultiplier,
-    assetLtv: ltv,
-    ltvPercent,
-    liquidationThreshold,
-    liquidationPrice,
-    priceDropBuffer,
-    // APY fields — not computed here; use sdk.previewLeverage for full APY/earnings data
-    supplyApyBreakdown: { base: 0, reward: 0, total: 0 },
-    borrowApyBreakdown: { gross: 0, rebate: 0, net: 0 },
-    netApy: 0,
-    annualNetEarningsUsd: 0,
-    swapSlippagePct: 1.0,
-  };
-}
-
-/**
  * Build leverage transaction as a Programmable Transaction Block (PTB)
  *
  * Constructs an atomic transaction that executes the full leverage strategy.
  *
  * **Transaction Flow:**
  * 1. Borrow USDC via flash loan from Scallop
- * 2. Swap USDC to deposit asset via 7k Protocol aggregator
- * 3. Merge user's deposit with swapped amount
- * 4. Refresh protocol oracles
+ * 2. Refresh protocol oracles (before swap to avoid Pyth conflicts)
+ * 3. Swap USDC to deposit asset via 7k Protocol aggregator
+ * 4. Merge user's deposit with swapped amount
  * 5. Deposit total collateral to lending protocol
  * 6. Borrow USDC from protocol to repay flash loan
  * 7. Repay flash loan (transaction fails if not repaid)
@@ -203,29 +101,22 @@ export async function buildLeverageTransaction(
   // These cannot be used as collateral because we borrow USDC to repay the flash loan
   const normalizedDeposit = normalizeCoinType(depositCoinType);
   if (UNSUPPORTED_COIN_TYPES.includes(normalizedDeposit)) {
-    // Check ❌: What about listing errors like solidity contract styles to avoid gerneral error message or using enum for erros.
+    // TODO(#6): Use typed UnsupportedAssetError instead of generic Error
     throw new Error(
       `Unsupported deposit asset for leverage strategy. Stablecoins like USDC cannot be used as collateral.`,
     );
   }
 
-  // Use SDK-level COIN_DECIMALS for decimal info, fallback to reserve lookup
-  // TODO: Future improvement - make protocol adapters provide decimal info
   const normalized = normalizedDeposit;
-  const reserve = getReserveByCoinType(normalized);
-  const decimals = COIN_DECIMALS[normalized] ?? reserve?.decimals ?? 8;
+  const decimals = getDecimals(normalized);
 
-  // Calculate preview to get flash loan amount
-  const preview = await calculateLeveragePreview({
-    depositCoinType: normalized,
-    depositAmount,
-    multiplier,
-  });
-
-  const flashLoanUsdc = preview.flashLoanUsdc;
+  // Calculate flash loan amount directly
+  const depositPrice = await getTokenPrice(normalized);
+  const initialEquityUsd = (Number(depositAmount) / 10 ** decimals) * depositPrice;
+  const flashLoanUsdc = BigInt(Math.ceil(initialEquityUsd * (multiplier - 1) * 1e6));
 
   // 1. Flash loan USDC from Scallop
-  // TODO: Support other flash loan assets (USDT) in the future
+  // TODO(#7): Support other flash loan assets (USDT) in the future
   const FLASH_LOAN_ASSET = "usdc" as const;
   const [loanCoin, receipt] = flashLoanClient.borrowFlashLoan(
     tx,
@@ -233,17 +124,25 @@ export async function buildLeverageTransaction(
     FLASH_LOAN_ASSET,
   );
 
-  // 2. Swap USDC → deposit asset
+  // 2. Refresh oracles BEFORE swap to avoid Pyth hot potato conflicts.
+  // The 7k swap may add Pyth oracle update commands for DEX routing.
+  // If refreshOracles also adds Pyth updates for the same feeds AFTER
+  // the swap, both create Pyth hot potatoes for the same price feeds,
+  // causing dynamic_field::add abort. Refreshing first ensures the
+  // protocol's Pyth lifecycle completes before the swap starts.
+  await protocol.refreshOracles(tx, [normalized, USDC_COIN_TYPE], userAddress);
+
+  // 3. Swap USDC → deposit asset
   // Note: Stablecoins are already rejected above, so swap is always needed
   const { quote: bestQuote } = await findBestSwapQuote(
     swapClient,
     flashLoanUsdc.toString(),
     USDC_COIN_TYPE,
     normalized,
-    `USDC \u2192 ${reserve?.symbol ?? normalized}`,
+    `USDC \u2192 ${normalized.split("::").pop() ?? normalized}`,
   );
 
-  // TODO: Make slippage configurable via leverage params
+  // TODO(#8): Make slippage configurable via leverage params
   const SLIPPAGE_BPS = 100; // 1%
   const swappedAsset = await swapClient.swap(
     {
@@ -255,31 +154,38 @@ export async function buildLeverageTransaction(
     SLIPPAGE_BPS,
   );
 
-  // 3. Prepare deposit coin (merge user's asset with swapped)
+  // 4. Prepare deposit coin (merge user's asset with swapped)
   let depositCoin: any;
   const isSui = normalized.endsWith("::sui::SUI");
 
   if (isSui) {
     // For SUI: swappedAsset is already Coin<SUI> from swap
     // Split user's deposit from gas and merge INTO swapped asset
-    // TODO: Optimize SUI handling - consider checking balance first
+    // TODO(#9): Optimize SUI handling - consider checking balance first
     const [userDeposit] = tx.splitCoins(tx.gas, [tx.pure.u64(depositAmount)]);
     tx.mergeCoins(swappedAsset, [userDeposit]);
     depositCoin = swappedAsset;
   } else {
-    // For non-SUI: fetch user's coins, merge, split exact amount
-    const userCoins = await suiClient.getCoins({
-      owner: userAddress,
-      coinType: normalized,
-    });
+    // For non-SUI: fetch ALL user's coins (paginated), merge, split exact amount
+    const allCoins: Array<{ coinObjectId: string; balance: string }> = [];
+    let cursor: string | null | undefined = undefined;
+    do {
+      const page = await suiClient.getCoins({
+        owner: userAddress,
+        coinType: normalized,
+        cursor: cursor ?? undefined,
+      });
+      allCoins.push(...page.data);
+      cursor = page.hasNextPage ? page.nextCursor : null;
+    } while (cursor);
 
-    if (userCoins.data.length === 0) {
-      throw new Error(`No ${reserve?.symbol} coins found in wallet`);
+    if (allCoins.length === 0) {
+      throw new Error(`No ${normalized.split("::").pop()} coins found in wallet`);
     }
 
-    const primaryCoin = tx.object(userCoins.data[0].coinObjectId);
-    if (userCoins.data.length > 1) {
-      const otherCoins = userCoins.data
+    const primaryCoin = tx.object(allCoins[0].coinObjectId);
+    if (allCoins.length > 1) {
+      const otherCoins = allCoins
         .slice(1)
         .map((c) => tx.object(c.coinObjectId));
       tx.mergeCoins(primaryCoin, otherCoins);
@@ -293,20 +199,15 @@ export async function buildLeverageTransaction(
     depositCoin = swappedAsset;
   }
 
-  // 4. Refresh oracles (required before deposit/borrow operations)
-  await protocol.refreshOracles(tx, [normalized, USDC_COIN_TYPE], userAddress);
-
   // 5. Deposit to lending protocol
   await protocol.deposit(tx, depositCoin, normalized, userAddress);
 
   // 6. Calculate repayment amount (flash loan + fee + borrow interest buffer)
-  // TODO: Consider adding flash loan fee query method to protocol SDK
+  // TODO(#10): Consider adding flash loan fee query method to protocol SDK
   // const flashLoanFee = ScallopFlashLoanClient.calculateFee(flashLoanUsdc);
   const repaymentAmount = flashLoanUsdc;
 
-  // Add 0.5% buffer for borrow interest that accrues immediately
-  // This ensures we borrow enough to cover the flash loan repayment
-  const BORROW_FEE_BUFFER = 1.005;
+  // Add buffer for borrow interest that accrues immediately
   const borrowAmount = BigInt(
     Math.ceil(Number(repaymentAmount) * BORROW_FEE_BUFFER),
   );

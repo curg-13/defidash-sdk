@@ -191,7 +191,7 @@ Net APY = (totalPositionUsd × totalSupplyApy − debtUsd × netBorrowApy) / ini
 |------|------|------|
 | `InvalidParameterError` | depositAmount/depositValueUsd 둘 다 or 둘 다 미제공 | 하나만 제공 |
 | `InvalidParameterError` | multiplier > maxMultiplier | 배율 낮추기 |
-| `UnsupportedProtocolError` | 프로토콜 미초기화 | `sdk.initialize()` 호출 |
+| `UnsupportedProtocolError` | 프로토콜 미초기화 | `DefiDashSDK.create()` 호출 |
 | Reserve not found | 해당 자산이 프로토콜에 미지원 | 지원 자산 확인 |
 
 ---
@@ -202,8 +202,7 @@ Net APY = (totalPositionUsd × totalSupplyApy − debtUsd × netBorrowApy) / ini
 import { DefiDashSDK, LendingProtocol } from '@defidash/sdk';
 
 // SDK 초기화 (앱 시작 시 1회)
-const sdk = new DefiDashSDK({ secretKey });
-await sdk.initialize(suiClient, keypair);
+const sdk = await DefiDashSDK.create(suiClient, keypair);
 
 // 사용자가 프로토콜/자산/배율 선택 시 호출
 const preview = await sdk.previewLeverage({

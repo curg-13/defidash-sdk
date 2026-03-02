@@ -9,13 +9,13 @@ import { SuiClient } from "@mysten/sui/client";
 import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
 import { Scallop } from "@scallop-io/sui-scallop-sdk";
 import { COIN_TYPES } from "../types";
-import { parseUnits } from "../utils";
-import { getReserveByCoinType } from "../protocols/suilend/constants";
+import { parseUnits, getDecimals } from "../utils";
 import { ScallopFlashLoanClient } from "../protocols/scallop/flash-loan";
 import {
   getScallopCoinName,
   computeLeverageAmounts,
   findBestSwapQuote,
+  BORROW_FEE_BUFFER,
 } from "./common";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -56,8 +56,7 @@ export async function buildScallopLeverageTransaction(
   const { coinType, multiplier, userAddress, secretKey } = params;
   const { suiClient, swapClient } = deps;
 
-  const reserve = getReserveByCoinType(coinType);
-  const decimals = reserve?.decimals || 9;
+  const decimals = getDecimals(coinType, 9);
   const symbol = coinType.split("::").pop()?.toUpperCase() || "SUI";
   const isSui = coinType.endsWith("::sui::SUI");
   const coinName = getScallopCoinName(coinType);
@@ -81,7 +80,7 @@ export async function buildScallopLeverageTransaction(
     initialEquityUsd,
     multiplier,
     ScallopFlashLoanClient.calculateFee,
-    1.003,
+    BORROW_FEE_BUFFER,
   );
 
   // ── Initialize Scallop SDK ─────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 /**
- * DefiDash SDK - Leverage Test
+ * DefiDash SDK - Leverage Example
  *
- * Tests the SDK leverage functionality
+ * Demonstrates the build + execute pattern for leverage.
  */
 
 import * as dotenv from "dotenv";
@@ -9,6 +9,7 @@ dotenv.config({ path: ".env" });
 
 import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { Transaction } from "@mysten/sui/transactions";
 import { DefiDashSDK, LendingProtocol } from "../src";
 import {
   logHeader,
@@ -25,7 +26,7 @@ const SUI_FULLNODE_URL =
   process.env.SUI_FULLNODE_URL || getFullnodeUrl("mainnet");
 
 async function main() {
-  logHeader("🧪 DefiDash SDK - Leverage Test");
+  logHeader("🧪 DefiDash SDK - Leverage Example");
 
   // Setup
   const secretKey = process.env.SECRET_KEY;
@@ -44,11 +45,11 @@ async function main() {
 
   const suiClient = new SuiClient({ url: SUI_FULLNODE_URL });
   const keypair = Ed25519Keypair.fromSecretKey(secretKey as any);
-  logWallet(keypair.getPublicKey().toSuiAddress());
+  const address = keypair.getPublicKey().toSuiAddress();
+  logWallet(address);
 
   // Initialize SDK (pass secretKey for Scallop support)
-  const sdk = new DefiDashSDK({ secretKey });
-  await sdk.initialize(suiClient, keypair);
+  const sdk = await DefiDashSDK.create(suiClient, keypair);
   logSDKInit(true);
 
   // Config
@@ -67,17 +68,14 @@ async function main() {
   let depositValueUsd: number | undefined;
 
   if (process.env.LEVERAGE_DEPOSIT_VALUE_USD) {
-    // Option 1: USD value (e.g., 1.0 for $1 worth)
     depositValueUsd = parseFloat(process.env.LEVERAGE_DEPOSIT_VALUE_USD);
     console.log(`   💵 Using USD value: $${depositValueUsd}`);
   } else if (process.env.LEVERAGE_DEPOSIT_AMOUNT) {
-    // Option 2: Raw amount in token units (converted to human-readable)
     depositAmount = (
       Number(process.env.LEVERAGE_DEPOSIT_AMOUNT) / 1e8
     ).toString();
     console.log(`   🪙 Using token amount: ${depositAmount} ${depositAsset}`);
   } else {
-    // Default fallback
     depositAmount = "0.00001";
     console.log(`   🪙 Using default amount: ${depositAmount} ${depositAsset}`);
   }
@@ -107,18 +105,23 @@ async function main() {
     console.error(`   ⚠️ Preview error: ${error.message}`);
   }
 
-  // Execute
-  const result = await sdk.leverage({
+  // Build + Execute
+  const tx = new Transaction();
+  tx.setSender(address);
+  await sdk.buildLeverageTransaction(tx, {
     protocol,
     depositAsset,
     depositAmount,
     depositValueUsd,
     multiplier,
-    dryRun,
   });
+
+  const result = dryRun
+    ? await sdk.dryRun(tx)
+    : await sdk.execute(tx);
   logStrategyResult(result, "leverage", dryRun);
 
-  logFooter("Test complete!");
+  logFooter("Example complete!");
 }
 
 main().catch(console.error);
