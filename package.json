@@ -1,15 +1,16 @@
 {
   "name": "defi-dash-sdk",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Multi-protocol DeFi SDK for Sui blockchain - leverage, flash loans, and lending strategies",
   "files": [
     "dist",
+    "!dist/__tests__",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "start": "ts-node src/index.ts",
-    "build": "tsc",
+    "build": "tsc && tsc -p tsconfig.esm.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "example:portfolio": "npx ts-node examples/get_portfolio.ts",
@@ -32,7 +33,15 @@
   "license": "ISC",
   "type": "commonjs",
   "main": "dist/index.js",
+  "module": "dist/esm/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
   "peerDependencies": {
     "@7kprotocol/sdk-ts": "^4.0.0",
     "@mysten/sui": "^1.42.0",
