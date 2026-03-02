@@ -4,7 +4,7 @@
   "description": "Multi-protocol DeFi SDK for Sui blockchain - leverage, flash loans, and lending strategies",
   "files": [
     "dist",
-    "dist/esm",
+    "!dist/__tests__",
     "README.md",
     "LICENSE"
   ],
