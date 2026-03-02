@@ -204,51 +204,57 @@ export class ScallopAdapter implements ILendingProtocol {
     const obligation = await this.query.queryObligation(obligations[0].id);
     if (!obligation) return null;
 
-    let collateral: AssetPosition | null = null;
-    let debt: AssetPosition | null = null;
-
     const collaterals = (obligation as any).collaterals || [];
-    const debts = (obligation as any).debts || [];
+    const debtItems = (obligation as any).debts || [];
 
-    if (collaterals.length > 0) {
-      const col = collaterals[0];
-      // Scallop SDK returns type as { name: string }
-      const rawCoinType = col.coinType || col.type?.name || "";
-      const coinType = normalizeCoinType(rawCoinType);
-      const reserve = getReserveByCoinType(coinType);
-      const decimals = reserve?.decimals || 9;
-      const amount = BigInt(col.amount || col.depositAmount || 0);
-      const price = await getTokenPrice(coinType);
+    // Build all supply positions
+    const supplies: AssetPosition[] = await Promise.all(
+      collaterals.map(async (col: any) => {
+        const rawCoinType = col.coinType || col.type?.name || "";
+        const coinType = normalizeCoinType(rawCoinType);
+        const reserve = getReserveByCoinType(coinType);
+        const decimals = reserve?.decimals || 9;
+        const amount = BigInt(col.amount || col.depositAmount || 0);
+        const price = await getTokenPrice(coinType);
+        return {
+          amount,
+          symbol: reserve?.symbol || this.getCoinName(coinType).toUpperCase(),
+          coinType,
+          decimals,
+          valueUsd: (Number(amount) / Math.pow(10, decimals)) * price,
+        };
+      }),
+    );
 
-      collateral = {
-        amount,
-        symbol: reserve?.symbol || this.getCoinName(coinType).toUpperCase(),
-        coinType,
-        decimals,
-        valueUsd: (Number(amount) / Math.pow(10, decimals)) * price,
-      };
-    }
+    // Build all borrow positions
+    const allBorrows: AssetPosition[] = await Promise.all(
+      debtItems.map(async (d: any) => {
+        const rawCoinType = d.coinType || d.type?.name || "";
+        const coinType = normalizeCoinType(rawCoinType);
+        const reserve = getReserveByCoinType(coinType);
+        const decimals = reserve?.decimals || 6;
+        const amount = BigInt(d.amount || d.borrowAmount || 0);
+        const price = await getTokenPrice(coinType);
+        return {
+          amount,
+          symbol: reserve?.symbol || "USDC",
+          coinType,
+          decimals,
+          valueUsd: (Number(amount) / Math.pow(10, decimals)) * price,
+        };
+      }),
+    );
 
-    if (debts.length > 0) {
-      const d = debts[0];
-      // Scallop SDK returns type as { name: string }
-      const rawCoinType = d.coinType || d.type?.name || "";
-      const coinType = normalizeCoinType(rawCoinType);
-      const reserve = getReserveByCoinType(coinType);
-      const decimals = reserve?.decimals || 6;
-      const amount = BigInt(d.amount || d.borrowAmount || 0);
-      const price = await getTokenPrice(coinType);
-
-      debt = {
-        amount,
-        symbol: reserve?.symbol || "USDC",
-        coinType,
-        decimals,
-        valueUsd: (Number(amount) / Math.pow(10, decimals)) * price,
-      };
-    }
-
+    // Primary = largest by USD value
+    const collateral = [...supplies].sort((a, b) => b.valueUsd - a.valueUsd)[0] ?? null;
     if (!collateral) return null;
+
+    const debt = allBorrows.length > 0
+      ? [...allBorrows].sort((a, b) => b.valueUsd - a.valueUsd)[0]
+      : null;
+
+    const totalSupplyUsd = supplies.reduce((s, p) => s + p.valueUsd, 0);
+    const totalDebtUsd = allBorrows.reduce((s, p) => s + p.valueUsd, 0);
 
     return {
       collateral,
@@ -259,7 +265,9 @@ export class ScallopAdapter implements ILendingProtocol {
         decimals: 6,
         valueUsd: 0,
       },
-      netValueUsd: collateral.valueUsd - (debt?.valueUsd || 0),
+      supplies,
+      borrows: allBorrows,
+      netValueUsd: totalSupplyUsd - totalDebtUsd,
     };
   }
 
@@ -704,12 +712,30 @@ export class ScallopAdapter implements ILendingProtocol {
   }
 
   async refreshOracles(
-    _tx: Transaction,
-    _coinTypes: string[],
+    tx: Transaction,
+    coinTypes: string[],
     _userAddress: string,
   ): Promise<void> {
-    // Scallop oracle refresh is embedded in borrow/withdraw calls via xOracle
-    // No separate refresh needed for basic operations
+    this.ensureInitialized();
+
+    // Convert coinTypes to Scallop coin names
+    const coinNames = coinTypes
+      .map((ct) => {
+        const normalized = normalizeCoinType(ct);
+        return this.coinTypeToNameMap[normalized];
+      })
+      .filter(Boolean);
+
+    if (coinNames.length === 0) return;
+
+    // Create Scallop builder and inject existing Transaction into its txBlock.
+    // This makes updateAssetPricesQuick() append oracle refresh commands
+    // directly into the provided PTB.
+    const builder = await this.scallop.createScallopBuilder();
+    const scallopTx = builder.createTxBlock();
+    scallopTx.txBlock = tx;
+
+    await scallopTx.updateAssetPricesQuick(coinNames);
   }
 
   /**

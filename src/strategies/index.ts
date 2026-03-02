@@ -4,7 +4,6 @@
 
 export {
   buildLeverageTransaction,
-  calculateLeveragePreview,
   LeverageBuildParams,
 } from "./leverage";
 

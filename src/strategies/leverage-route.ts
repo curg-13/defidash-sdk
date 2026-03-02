@@ -15,6 +15,12 @@ import {
 } from "../types";
 import { InvalidParameterError } from "../utils/errors";
 
+/** Safety margin subtracted from maxMultiplier when requesting a near-max preview */
+const MAX_MULT_SAFETY_MARGIN = 0.01;
+
+/** Minimum safe multiplier floor (below this leverage has negligible effect) */
+const MIN_SAFE_MULTIPLIER = 1.1;
+
 // ── Dependency injection ─────────────────────────────────────────────────────
 
 export interface FindBestRouteDeps {
@@ -105,7 +111,7 @@ export async function findBestLeverageRoute(
     ...successfulRisk.map((r) => r.riskParams.maxMultiplier),
   );
   const safeMultiplier = Math.max(
-    1.1,
+    MIN_SAFE_MULTIPLIER,
     minMaxMultiplier - LEVERAGE_MULTIPLIER_BUFFER,
   );
 
@@ -122,7 +128,7 @@ export async function findBestLeverageRoute(
     depositAmount: params.depositAmount,
     depositValueUsd: params.depositValueUsd,
     multiplier:
-      Math.round((bestMaxEntry.riskParams.maxMultiplier - 0.01) * 100) / 100,
+      Math.round((bestMaxEntry.riskParams.maxMultiplier - MAX_MULT_SAFETY_MARGIN) * 100) / 100,
   });
 
   const safePreviewResults = await Promise.allSettled(
@@ -172,7 +178,7 @@ export async function findBestLeverageRoute(
     bestMaxMultiplier: {
       protocol: bestMaxEntry.protocol,
       multiplier:
-        Math.round((bestMaxEntry.riskParams.maxMultiplier - 0.01) * 100) / 100,
+        Math.round((bestMaxEntry.riskParams.maxMultiplier - MAX_MULT_SAFETY_MARGIN) * 100) / 100,
       preview: maxMultPreview,
     },
     bestApy: {

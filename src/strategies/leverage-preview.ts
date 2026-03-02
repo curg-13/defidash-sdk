@@ -12,9 +12,9 @@ import {
   COIN_TYPES,
 } from "../types";
 import { ScallopFlashLoanClient } from "../protocols/scallop/flash-loan";
-import { getReserveByCoinType } from "../protocols/suilend/constants";
-import { parseUnits } from "../utils";
-import { InvalidParameterError, UnsupportedProtocolError } from "../utils/errors";
+import { parseUnits, getDecimals } from "../utils";
+import { calculateLiquidationMetrics } from "../utils/calculations";
+import { InvalidParameterError } from "../utils/errors";
 
 // ── Dependency injection ─────────────────────────────────────────────────────
 
@@ -58,8 +58,7 @@ export async function previewLeverage(
     );
   }
 
-  const reserve = getReserveByCoinType(coinType);
-  const decimals = reserve?.decimals || 8;
+  const decimals = getDecimals(coinType);
 
   // ── Risk parameters ────────────────────────────────────────────────────────
   const riskParams = await protocol.getAssetRiskParams(coinType);
@@ -100,26 +99,18 @@ export async function previewLeverage(
 
   // ── Liquidation ────────────────────────────────────────────────────────────
   const totalCollateralAmount = depositAmountHuman * multiplier;
-  const liquidationPrice =
-    debtUsd / (totalCollateralAmount * riskParams.liquidationThreshold);
-  const priceDropBuffer = (1 - liquidationPrice / price) * 100;
+  const { liquidationPrice, priceDropBuffer } = calculateLiquidationMetrics(
+    debtUsd,
+    totalCollateralAmount,
+    riskParams.liquidationThreshold,
+    price,
+  );
 
   // ── APY & Earnings ─────────────────────────────────────────────────────────
   const depositApy = await protocol.getAssetApy(coinType);
 
   const usdcCoinType = COIN_TYPES.USDC;
-  let borrowApyData = {
-    supplyApy: 0,
-    rewardApy: 0,
-    totalSupplyApy: 0,
-    borrowApy: 0,
-    borrowRewardApy: 0,
-  };
-  try {
-    borrowApyData = await protocol.getAssetApy(usdcCoinType);
-  } catch {
-    // If USDC APY unavailable for this protocol, borrowApy stays 0
-  }
+  const borrowApyData = await protocol.getAssetApy(usdcCoinType);
 
   const annualSupplyEarnings = totalPositionUsd * depositApy.totalSupplyApy;
   const annualBorrowCost = debtUsd * borrowApyData.borrowApy;
@@ -128,39 +119,35 @@ export async function previewLeverage(
     initialEquityUsd > 0 ? annualNetEarningsUsd / initialEquityUsd : 0;
 
   // ── Swap slippage (7k quote) ───────────────────────────────────────────────
-  let swapSlippagePct = 1.0; // default fallback
+  let swapSlippagePct = 1.0;
   let effectiveMultiplier = multiplier;
 
-  try {
-    const swapQuotes = await swapClient.quote({
-      amountIn: flashLoanUsdc.toString(),
-      coinTypeIn: COIN_TYPES.USDC,
-      coinTypeOut: coinType,
-    });
+  const swapQuotes = await swapClient.quote({
+    amountIn: flashLoanUsdc.toString(),
+    coinTypeIn: COIN_TYPES.USDC,
+    coinTypeOut: coinType,
+  });
 
-    if (swapQuotes.length > 0) {
-      const bestQuote = swapQuotes.sort(
-        (a: any, b: any) => Number(b.amountOut) - Number(a.amountOut),
-      )[0];
+  if (swapQuotes.length > 0) {
+    const bestQuote = [...swapQuotes].sort(
+      (a: any, b: any) => Number(b.amountOut) - Number(a.amountOut),
+    )[0];
 
-      const actualAmountOut =
-        Number(bestQuote.amountOut) / Math.pow(10, decimals);
-      const theoreticalAmountOut = Number(flashLoanUsdc) / 1e6 / price;
+    const actualAmountOut =
+      Number(bestQuote.amountOut) / Math.pow(10, decimals);
+    const theoreticalAmountOut = Number(flashLoanUsdc) / 1e6 / price;
 
-      if (theoreticalAmountOut > 0) {
-        const slippageRatio =
-          (theoreticalAmountOut - actualAmountOut) / theoreticalAmountOut;
-        swapSlippagePct = Math.max(0, slippageRatio * 100);
-      }
-
-      const actualTotalToken = depositAmountHuman + actualAmountOut;
-      effectiveMultiplier =
-        actualAmountOut > 0
-          ? actualTotalToken / depositAmountHuman
-          : multiplier;
+    if (theoreticalAmountOut > 0) {
+      const slippageRatio =
+        (theoreticalAmountOut - actualAmountOut) / theoreticalAmountOut;
+      swapSlippagePct = Math.max(0, slippageRatio * 100);
     }
-  } catch {
-    // Quote failed — use defaults
+
+    const actualTotalToken = depositAmountHuman + actualAmountOut;
+    effectiveMultiplier =
+      actualAmountOut > 0
+        ? actualTotalToken / depositAmountHuman
+        : multiplier;
   }
 
   return {

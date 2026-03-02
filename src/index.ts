@@ -10,85 +10,68 @@
  * ```typescript
  * import { DefiDashSDK, LendingProtocol } from 'defi-dash-sdk';
  *
- * const sdk = new DefiDashSDK();
- * await sdk.initialize(suiClient, keypair);
+ * const sdk = await DefiDashSDK.create(suiClient, keypair);
  *
- * // Leverage strategy
- * const result = await sdk.leverage({
+ * // Build leverage transaction
+ * const tx = new Transaction();
+ * tx.setSender(address);
+ * await sdk.buildLeverageTransaction(tx, {
  *   protocol: LendingProtocol.Suilend,
  *   depositAsset: 'LBTC',
  *   depositAmount: '0.001',
  *   multiplier: 2.0,
- *   dryRun: true
  * });
+ *
+ * // Node.js: execute via SDK
+ * const result = await sdk.execute(tx);
+ *
+ * // Browser: execute via wallet adapter
+ * await signAndExecute({ transaction: tx });
  * ```
  */
 
 // Main SDK
-export { DefiDashSDK } from "./sdk";
+export { DefiDashSDK } from './sdk';
 
-// Types, Interfaces, Enums, and Constants
+// Enums & Constants
 export {
-  // Enums
   LendingProtocol,
-  type PositionSide,
-
-  // Position types
-  type AssetPosition,
-  type PositionInfo,
-  type Position,
-  type AccountPortfolio,
-  type MarketAsset,
-
-  // Strategy types
-  type LeverageParams,
-  type DeleverageParams,
-  type StrategyResult,
-  type LeveragePreview,
-  type FindBestRouteParams,
-  type LeverageRoute,
-  type LeverageRouteResult,
-
-  // Config types
-  type SDKOptions,
-  type BrowserLeverageParams,
-  type BrowserDeleverageParams,
-
-  // Protocol interface
-  type ILendingProtocol,
-  type MarketReserve,
-
-  // Constants
   USDC_COIN_TYPE,
   SUI_COIN_TYPE,
-  DEFAULT_7K_PARTNER,
   COIN_TYPES,
-  LEVERAGE_MULTIPLIER_BUFFER,
-} from "./types";
+} from './types';
 
-// Strategy Builders (for advanced usage)
+// Types — Strategy
+export type {
+  StrategyResult,
+  LeveragePreview,
+  FindBestRouteParams,
+  LeverageRoute,
+  LeverageRouteResult,
+} from './types';
+
+// Types — Position & Portfolio
+export type {
+  AssetPosition,
+  PositionInfo,
+  Position,
+  AccountPortfolio,
+  MarketAsset,
+} from './types';
+
+// Types — Config
+export type {
+  SDKOptions,
+  BrowserLeverageParams,
+  BrowserDeleverageParams,
+} from './types';
+
+// Utilities (frontend-facing only)
+export { formatUnits, parseUnits } from './utils/format';
+export { normalizeCoinType } from './utils/coin';
 export {
-  buildLeverageTransaction,
-  calculateLeveragePreview,
-  buildDeleverageTransaction,
-  calculateDeleverageEstimate,
-  previewLeverage,
-  findBestLeverageRoute,
-  buildScallopLeverageTransaction,
-  getScallopCoinName,
-  computeLeverageAmounts,
-  findBestSwapQuote,
-} from "./strategies";
-
-// Utilities
-export * from "./utils";
-
-// Flash Loan
-export { ScallopFlashLoanClient } from "./protocols/scallop/flash-loan";
-
-// Protocol-specific data
-export {
-  SUILEND_RESERVES,
-  getReserveByCoinType,
-  getReserveBySymbol,
-} from "./protocols/suilend/constants";
+  DefiDashError,
+  SDKNotInitializedError,
+  InvalidParameterError,
+  InvalidCoinTypeError,
+} from './utils/errors';

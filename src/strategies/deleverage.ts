@@ -8,9 +8,16 @@ import { Transaction } from "@mysten/sui/transactions";
 import { SuiClient } from "@mysten/sui/client";
 import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
 import { MetaAg, getTokenPrice } from "@7kprotocol/sdk-ts";
-import { ILendingProtocol, USDC_COIN_TYPE, PositionInfo } from "../types";
+import { ILendingProtocol, IScallopProtocol, USDC_COIN_TYPE, PositionInfo } from "../types";
 import { ScallopFlashLoanClient } from "../protocols/scallop/flash-loan";
 import { findBestSwapQuote } from "./common";
+
+/**
+ * Slippage tolerance for deleverage swaps (basis points).
+ * Higher than leverage because deleverage swaps small collateral → USDC
+ * where price impact and rounding are more significant.
+ */
+const DELEVERAGE_SLIPPAGE_BPS = 500; // 5%
 
 export interface DeleverageBuildParams {
   protocol: ILendingProtocol;
@@ -32,6 +39,13 @@ export interface DeleverageEstimate {
 }
 
 /**
+ * Type guard for Scallop protocol adapter
+ */
+function isScallopProtocol(protocol: ILendingProtocol): protocol is IScallopProtocol {
+  return protocol.name === "scallop";
+}
+
+/**
  * Build Scallop-specific deleverage transaction using direct moveCall
  * (matches success script pattern exactly)
  */
@@ -42,20 +56,23 @@ async function buildScallopDeleverageTransaction(
   estimate: DeleverageEstimate,
 ): Promise<void> {
   const { protocol, swapClient, userAddress, position } = params;
-  const scallopAdapter = protocol as any;
+
+  if (!isScallopProtocol(protocol)) {
+    throw new Error("Expected Scallop protocol adapter");
+  }
 
   const supplyCoinType = position.collateral.coinType;
   const borrowCoinType = USDC_COIN_TYPE;
   const withdrawAmount = position.collateral.amount;
 
   // Get Scallop addresses
-  const scallopAddresses = scallopAdapter.getAddresses();
+  const scallopAddresses = protocol.getAddresses();
   const coreAddresses = scallopAddresses.core;
   const borrowIncentiveAddresses = scallopAddresses.borrowIncentive;
   const veScaAddresses = scallopAddresses.vesca;
 
   // Get obligation info
-  const obligations = await scallopAdapter.getObligations(userAddress);
+  const obligations = await protocol.getObligations(userAddress);
   if (obligations.length === 0) {
     throw new Error("No obligation found for Scallop deleverage");
   }
@@ -64,14 +81,15 @@ async function buildScallopDeleverageTransaction(
   const obligationKeyId = obligations[0].keyId;
   const isLocked = obligations[0].locked;
 
+  // Shared clock reference — reused across all moveCalls
+  const clockRef = tx.sharedObjectRef({
+    objectId: SUI_CLOCK_OBJECT_ID,
+    mutable: false,
+    initialSharedVersion: "1",
+  });
+
   // Step 0: Unstake if locked
   if (isLocked) {
-    const clockRef = tx.sharedObjectRef({
-      objectId: SUI_CLOCK_OBJECT_ID,
-      mutable: false,
-      initialSharedVersion: "1",
-    });
-
     tx.moveCall({
       target: `${borrowIncentiveAddresses.pkg}::user::unstake_v2`,
       arguments: [
@@ -95,12 +113,6 @@ async function buildScallopDeleverageTransaction(
   );
 
   // Step 2: Repay debt (direct moveCall)
-  const clockRef = tx.sharedObjectRef({
-    objectId: SUI_CLOCK_OBJECT_ID,
-    mutable: false,
-    initialSharedVersion: "1",
-  });
-
   tx.moveCall({
     target: `${coreAddresses.protocolPkg}::repay::repay`,
     typeArguments: [borrowCoinType],
@@ -108,18 +120,12 @@ async function buildScallopDeleverageTransaction(
       tx.object(coreAddresses.version),
       tx.object(obligationId),
       tx.object(coreAddresses.market),
-      loanCoin as any,
+      loanCoin,
       clockRef,
     ],
   });
 
   // Step 3: Withdraw collateral (direct moveCall)
-  const clockRef2 = tx.sharedObjectRef({
-    objectId: SUI_CLOCK_OBJECT_ID,
-    mutable: false,
-    initialSharedVersion: "1",
-  });
-
   const [withdrawnCoin] = tx.moveCall({
     target: `${coreAddresses.protocolPkg}::withdraw_collateral::withdraw_collateral`,
     typeArguments: [supplyCoinType],
@@ -131,7 +137,7 @@ async function buildScallopDeleverageTransaction(
       tx.object(coreAddresses.coinDecimalsRegistry),
       tx.pure.u64(withdrawAmount),
       tx.object(coreAddresses.xOracle),
-      clockRef2,
+      clockRef,
     ],
   });
 
@@ -154,14 +160,13 @@ async function buildScallopDeleverageTransaction(
       coinIn: coinToSwap,
       tx: tx,
     },
-    100,
+    DELEVERAGE_SLIPPAGE_BPS,
   );
 
   // Step 5: Repay flash loan
-  const [flashRepayment] = tx.splitCoins(swappedUsdc as any, [
-    estimate.totalRepayment,
-  ]);
-  flashLoanClient.repayFlashLoan(tx, flashRepayment as any, receipt, "usdc");
+  // Sui SDK splitCoins/transferObjects require `any` casts for swap client return types
+  const flashRepayCoins = tx.splitCoins(swappedUsdc as any, [estimate.totalRepayment]);
+  flashLoanClient.repayFlashLoan(tx, flashRepayCoins, receipt, "usdc");
 
   // Step 6: Transfer remaining to user
   tx.transferObjects([withdrawnCoin as any, swappedUsdc as any], userAddress);
@@ -188,27 +193,25 @@ export async function calculateDeleverageEstimate(
 
   // Get swap rate - use full collateral amount
   const withdrawAmount = supplyAmount; // Withdraw ALL collateral
-  const fullSwapQuotes = await swapClient.quote({
-    amountIn: withdrawAmount.toString(),
-    coinTypeIn: supplyCoinType,
-    coinTypeOut: USDC_COIN_TYPE,
-  });
+  const { quote: fullQuote, amountOut: fullSwapOut } = await findBestSwapQuote(
+    swapClient,
+    withdrawAmount.toString(),
+    supplyCoinType,
+    USDC_COIN_TYPE,
+    `${position.collateral.symbol} → USDC (estimate)`,
+  );
 
-  if (fullSwapQuotes.length === 0) {
+  const fullSwapIn = BigInt(fullQuote.amountIn);
+
+  if (fullSwapOut === 0n) {
     throw new Error(
-      `No swap quotes found for ${position.collateral.symbol} → USDC`,
+      `Swap quote returned zero output for ${position.collateral.symbol} → USDC. Cannot calculate deleverage estimate.`,
     );
   }
 
-  const fullQuote = fullSwapQuotes.sort(
-    (a, b) => Number(b.amountOut) - Number(a.amountOut),
-  )[0];
-
-  const fullSwapOut = BigInt(fullQuote.amountOut);
-  const fullSwapIn = BigInt(fullQuote.amountIn);
-
-  // Calculate optimal swap amount (with 2% buffer)
-  const targetUsdcOut = (totalRepayment * 102n) / 100n;
+  // Calculate optimal swap amount.
+  // Buffer must exceed DELEVERAGE_SLIPPAGE_BPS to guarantee enough USDC after slippage.
+  const targetUsdcOut = (totalRepayment * 110n) / 100n;
   const requiredSwapIn = (targetUsdcOut * fullSwapIn) / fullSwapOut;
   const actualSwapIn =
     requiredSwapIn > withdrawAmount ? withdrawAmount : requiredSwapIn;
@@ -268,8 +271,7 @@ export async function buildDeleverageTransaction(
   const estimate = await calculateDeleverageEstimate(params);
 
   // Scallop uses direct moveCall (like success script), other protocols use adapter
-  if (protocol.name === "scallop") {
-    // Scallop-specific implementation (matches success script pattern)
+  if (isScallopProtocol(protocol)) {
     await buildScallopDeleverageTransaction(
       tx,
       params,
@@ -325,14 +327,13 @@ export async function buildDeleverageTransaction(
       coinIn: coinToSwap,
       tx: tx,
     },
-    100,
+    DELEVERAGE_SLIPPAGE_BPS,
   );
 
   // 6. Repay flash loan
-  const [flashRepayment] = tx.splitCoins(swappedUsdc as any, [
-    estimate.totalRepayment,
-  ]);
-  flashLoanClient.repayFlashLoan(tx, flashRepayment as any, receipt, "usdc");
+  // Sui SDK splitCoins/transferObjects require `any` casts for swap client return types
+  const flashRepayCoins = tx.splitCoins(swappedUsdc as any, [estimate.totalRepayment]);
+  flashLoanClient.repayFlashLoan(tx, flashRepayCoins, receipt, "usdc");
 
   // 7. Transfer remaining to user
   // Some protocols consume the repayment coin entirely, others return unused portion
@@ -341,9 +342,6 @@ export async function buildDeleverageTransaction(
     tx.transferObjects([withdrawnCoin as any, swappedUsdc as any], userAddress);
   } else {
     // Protocol left remaining balance in loanCoin, transfer it
-    tx.transferObjects(
-      [withdrawnCoin as any, swappedUsdc as any, loanCoin as any],
-      userAddress,
-    );
+    tx.transferObjects([withdrawnCoin as any, swappedUsdc as any, loanCoin as any], userAddress);
   }
 }

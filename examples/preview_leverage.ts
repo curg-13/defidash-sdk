@@ -122,8 +122,7 @@ async function main() {
   console.log(`Wallet: ${address}\n`);
 
   // Initialize SDK
-  const sdk = new DefiDashSDK({ secretKey });
-  await sdk.initialize(suiClient, keypair);
+  const sdk = await DefiDashSDK.create(suiClient, keypair);
   console.log("SDK initialized.\n");
 
   // Test multiplier (conservative, should work on all protocols)

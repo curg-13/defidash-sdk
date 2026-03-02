@@ -1,7 +1,7 @@
-# `sdk.deleverage()` / `sdk.buildDeleverageTransaction()` — Deleverage Execution
+# `sdk.buildDeleverageTransaction()` — Deleverage Execution
 
 > **대상 독자**: DefiDash SDK 사용자 및 프론트엔드 개발자
-> **목적**: 디레버리지(포지션 해제) 메서드들의 사용법, estimate 로직, 트랜잭션 흐름 문서화
+> **목적**: 디레버리지(포지션 해제) 메서드의 사용법, estimate 로직, 트랜잭션 흐름 문서화
 
 ---
 
@@ -13,61 +13,15 @@
 3. 담보 일부를 USDC로 스왑하여 flash loan 상환
 4. 나머지 담보 + USDC 잔액을 유저에게 반환
 
-| 메서드 | 환경 | 설명 |
-|--------|------|------|
-| `sdk.deleverage()` | Node.js | Keypair로 서명+실행까지 자동 처리 |
-| `sdk.buildDeleverageTransaction()` | Browser | TX 빌드만 수행, wallet adapter로 서명 |
-
 ---
 
-## Node.js: `sdk.deleverage()`
+## 사용법
 
-```typescript
-// Step 1: Dry run으로 미리보기
-const preview = await sdk.deleverage({
-  protocol: LendingProtocol.Suilend,
-  dryRun: true,
-});
-
-if (preview.success) {
-  console.log(`Estimated gas: ${preview.gasUsed}`);
-
-  // Step 2: 실제 실행
-  const result = await sdk.deleverage({
-    protocol: LendingProtocol.Suilend,
-    dryRun: false,
-  });
-
-  if (result.success) {
-    console.log(`Position closed: ${result.txDigest}`);
-  }
-}
-```
-
-### Input: `DeleverageParams`
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `protocol` | O | `LendingProtocol` | 포지션이 있는 프로토콜 |
-| `dryRun` | - | `boolean` | true면 시뮬레이션만 |
-
-### Output: `StrategyResult`
-
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| `success` | `boolean` | 성공 여부 |
-| `txDigest` | `string?` | 트랜잭션 다이제스트 (실행 시) |
-| `gasUsed` | `bigint?` | 가스 사용량 (MIST) |
-| `error` | `string?` | 에러 메시지 |
-
----
-
-## Browser: `sdk.buildDeleverageTransaction()`
+### Browser
 
 ```typescript
 const tx = new Transaction();
 tx.setSender(account.address);
-tx.setGasBudget(200_000_000);
 
 await sdk.buildDeleverageTransaction(tx, {
   protocol: LendingProtocol.Suilend,
@@ -75,6 +29,41 @@ await sdk.buildDeleverageTransaction(tx, {
 
 await signAndExecute({ transaction: tx });
 ```
+
+### Node.js
+
+```typescript
+const tx = new Transaction();
+tx.setSender(address);
+
+await sdk.buildDeleverageTransaction(tx, {
+  protocol: LendingProtocol.Suilend,
+});
+
+// Dry run (시뮬레이션)
+const dryResult = await sdk.dryRun(tx);
+
+// Execute (실행)
+const result = await sdk.execute(tx);
+console.log(`Position closed: ${result.txDigest}`);
+```
+
+---
+
+## Input: `BrowserDeleverageParams`
+
+| 파라미터 | 필수 | 타입 | 설명 |
+|----------|------|------|------|
+| `protocol` | O | `LendingProtocol` | 포지션이 있는 프로토콜 |
+
+## Output: `StrategyResult` (dryRun / execute)
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `success` | `boolean` | 성공 여부 |
+| `txDigest` | `string?` | 트랜잭션 다이제스트 (실행 시) |
+| `gasUsed` | `bigint?` | 가스 사용량 (MIST) |
+| `error` | `string?` | 에러 메시지 |
 
 ---
 
@@ -187,11 +176,11 @@ await buildDeleverageTransaction(tx, params);
 
 | 에러 | 원인 | 해결 |
 |------|------|------|
-| `KeypairRequiredError` | `deleverage()` 호출 시 keypair 미제공 | `buildDeleverageTransaction` 사용 |
-| `PositionNotFoundError` | 해당 프로토콜에 포지션 없음 | 포지션 존재 확인 |
+| `PositionNotFoundError` | 해당 프로토콜에 포지션 없음 | `getPosition()` 으로 확인 |
 | `NoDebtError` | 부채 없는 포지션 | withdraw 사용 |
+| `KeypairRequiredError` | `execute()` 시 keypair 미제공 | Browser에서는 wallet adapter 사용 |
 | No swap quotes | DEX에서 경로 없음 | 자산/금액 확인 |
-| Obligation not found | Scallop obligation 미존재 | 포지션 상태 확인 |
+| Zero swap output | 스왑 출력 0 (유동성 부족) | 자산/금액 확인 |
 
 ---
 

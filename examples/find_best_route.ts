@@ -12,7 +12,9 @@ dotenv.config({ path: ".env" });
 
 import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { DefiDashSDK, LEVERAGE_MULTIPLIER_BUFFER } from "../src";
+import { Transaction } from "@mysten/sui/transactions";
+import { DefiDashSDK } from "../src";
+import { LEVERAGE_MULTIPLIER_BUFFER } from "../src/types";
 
 async function main() {
   // Setup
@@ -26,9 +28,9 @@ async function main() {
     url: process.env.SUI_FULLNODE_URL || getFullnodeUrl("mainnet"),
   });
   const keypair = Ed25519Keypair.fromSecretKey(secretKey as any);
+  const address = keypair.getPublicKey().toSuiAddress();
 
-  const sdk = new DefiDashSDK({ secretKey });
-  await sdk.initialize(suiClient, keypair);
+  const sdk = await DefiDashSDK.create(suiClient, keypair);
 
   // ── Step 1: Find best route ──────────────────────────────────────────────
   const route = await sdk.findBestLeverageRoute({
@@ -66,13 +68,16 @@ async function main() {
   // ── Step 2: Dryrun with best APY route ─────────────────────────────────
   console.log(`\nDryrun: ${apy.protocol} SUI ${apy.multiplier.toFixed(2)}x...`);
 
-  const result = await sdk.leverage({
+  const tx = new Transaction();
+  tx.setSender(address);
+  await sdk.buildLeverageTransaction(tx, {
     protocol: apy.protocol,
     depositAsset: "SUI",
     depositValueUsd: 1,
     multiplier: apy.multiplier,
-    dryRun: true,
   });
+
+  const result = await sdk.dryRun(tx);
 
   if (result.success) {
     const gas = result.gasUsed

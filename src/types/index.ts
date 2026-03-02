@@ -18,8 +18,6 @@ export type {
 
 // Strategy types
 export type {
-  LeverageParams,
-  DeleverageParams,
   StrategyResult,
   LeveragePreview,
   FindBestRouteParams,
@@ -49,6 +47,7 @@ export {
 // Protocol interface and types
 export type {
   ILendingProtocol,
+  IScallopProtocol,
   MarketReserve,
   AssetRiskParams,
   AssetApy,

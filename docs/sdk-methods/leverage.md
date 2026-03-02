@@ -1,66 +1,23 @@
-# `sdk.leverage()` / `sdk.buildLeverageTransaction()` — Leverage Execution
+# `sdk.buildLeverageTransaction()` — Leverage Execution
 
 > **대상 독자**: DefiDash SDK 사용자 및 프론트엔드 개발자
-> **목적**: 레버리지 실행 메서드들의 사용법, 트랜잭션 흐름, 프로토콜별 차이점 문서화
+> **목적**: 레버리지 실행 메서드의 사용법, 트랜잭션 흐름, 프로토콜별 차이점 문서화
 
 ---
 
 ## 개요
 
-레버리지 전략을 실행하는 두 가지 방법이 있습니다:
-
-| 메서드 | 환경 | 설명 |
-|--------|------|------|
-| `sdk.leverage()` | Node.js | Keypair로 서명+실행까지 자동 처리 |
-| `sdk.buildLeverageTransaction()` | Browser | TX 빌드만 수행, wallet adapter로 서명 |
+`buildLeverageTransaction()`은 레버리지 PTB를 빌드합니다. 실행은 `sdk.execute()` (Node.js) 또는 wallet adapter (Browser)를 사용합니다.
 
 ---
 
-## Node.js: `sdk.leverage()`
+## 사용법
 
-```typescript
-const result = await sdk.leverage({
-  protocol: LendingProtocol.Suilend,
-  depositAsset: 'SUI',
-  depositAmount: '10',       // 10 SUI
-  multiplier: 2.0,
-  dryRun: true,              // true: 시뮬레이션만, false: 실행
-});
-
-if (result.success) {
-  console.log(`TX: ${result.txDigest}`);
-  console.log(`Gas: ${result.gasUsed}`);
-}
-```
-
-### Input: `LeverageParams`
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `protocol` | O | `LendingProtocol` | 대상 프로토콜 |
-| `depositAsset` | O | `string` | 자산 심볼 또는 coin type |
-| `depositAmount` | △ | `string` | 토큰 수량 (depositValueUsd와 택 1) |
-| `depositValueUsd` | △ | `number` | USD 가치 |
-| `multiplier` | O | `number` | 레버리지 배율 (e.g., 2.0) |
-| `dryRun` | - | `boolean` | true면 시뮬레이션만 |
-
-### Output: `StrategyResult`
-
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| `success` | `boolean` | 성공 여부 |
-| `txDigest` | `string?` | 트랜잭션 다이제스트 (실행 시) |
-| `gasUsed` | `bigint?` | 가스 사용량 (MIST) |
-| `error` | `string?` | 에러 메시지 |
-
----
-
-## Browser: `sdk.buildLeverageTransaction()`
+### Browser
 
 ```typescript
 const tx = new Transaction();
 tx.setSender(account.address);
-tx.setGasBudget(200_000_000);
 
 await sdk.buildLeverageTransaction(tx, {
   protocol: LendingProtocol.Suilend,
@@ -69,13 +26,52 @@ await sdk.buildLeverageTransaction(tx, {
   multiplier: 2.0,
 });
 
-// Wallet adapter로 서명 & 실행
 await signAndExecute({ transaction: tx });
 ```
 
-### Input: `BrowserLeverageParams`
+### Node.js
 
-`LeverageParams`와 동일하되 `dryRun` 필드 없음.
+```typescript
+const tx = new Transaction();
+tx.setSender(address);
+
+await sdk.buildLeverageTransaction(tx, {
+  protocol: LendingProtocol.Suilend,
+  depositAsset: 'SUI',
+  depositValueUsd: 100,
+  multiplier: 2.0,
+});
+
+// Dry run (시뮬레이션)
+const dryResult = await sdk.dryRun(tx);
+
+// Execute (실행)
+const result = await sdk.execute(tx);
+console.log(`TX: ${result.txDigest}`);
+```
+
+---
+
+## Input: `BrowserLeverageParams`
+
+| 파라미터 | 필수 | 타입 | 설명 |
+|----------|------|------|------|
+| `protocol` | O | `LendingProtocol` | 대상 프로토콜 |
+| `depositAsset` | O | `string` | 자산 심볼 또는 coin type |
+| `depositAmount` | △ | `string` | 토큰 수량 (depositValueUsd와 택 1) |
+| `depositValueUsd` | △ | `number` | USD 가치 |
+| `multiplier` | O | `number` | 레버리지 배율 (e.g., 2.0) |
+
+> `depositAmount`와 `depositValueUsd` 중 정확히 하나만 제공해야 합니다.
+
+## Output: `StrategyResult` (dryRun / execute)
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `success` | `boolean` | 성공 여부 |
+| `txDigest` | `string?` | 트랜잭션 다이제스트 (실행 시) |
+| `gasUsed` | `bigint?` | 가스 사용량 (MIST) |
+| `error` | `string?` | 에러 메시지 |
 
 ---
 
@@ -114,23 +110,20 @@ await signAndExecute({ transaction: tx });
 
 ### Suilend / Navi
 
-- `buildLeverageTransaction()` → generic adapter를 통해 PTB 빌드
+- Generic adapter를 통해 PTB 빌드
 - Oracle refresh: 프로토콜 어댑터의 `refreshOracles()` 사용
+- Navi는 모든 pool oracle을 갱신해야 함 (operated asset뿐 아니라)
 
 ### Scallop
 
-- `sdk.leverage()`에서 내부적으로 `buildScallopLeverageTransaction()` 호출
 - **Scallop SDK builder** 사용 (oracle 업데이트에 `updateAssetPricesQuick` 필요)
-- `secretKey` 옵션 필수 (Scallop SDK 초기화에 사용)
 - Obligation 관리: 기존 obligation 재사용 또는 새로 생성
-
-```typescript
-const sdk = new DefiDashSDK({ secretKey: 'suiprivkey...' });
-```
 
 ---
 
 ## Gas 최적화
+
+`sdk.execute()` 호출 시 자동 적용:
 
 1. **Dry run**: 작은 고정 budget으로 시뮬레이션
 2. **Gas 계산**: 실제 사용량 + 20% 버퍼
@@ -139,17 +132,14 @@ const sdk = new DefiDashSDK({ secretKey: 'suiprivkey...' });
 
 ---
 
-## Standalone Functions (Advanced)
+## Standalone Function (Advanced)
 
 SDK 클래스 없이 직접 사용:
 
 ```typescript
-import {
-  buildLeverageTransaction,
-  buildScallopLeverageTransaction,
-} from '@defidash/sdk';
+import { buildLeverageTransaction } from '@defidash/sdk';
 
-// Generic (Suilend, Navi)
+const tx = new Transaction();
 await buildLeverageTransaction(tx, {
   protocol: suilendAdapter,
   flashLoanClient,
@@ -160,12 +150,6 @@ await buildLeverageTransaction(tx, {
   depositAmount: 1000000000n,
   multiplier: 2.0,
 });
-
-// Scallop-specific
-const { tx, builder } = await buildScallopLeverageTransaction(
-  { coinType, depositAmount: '10', multiplier: 2.0, userAddress, secretKey },
-  { suiClient, swapClient },
-);
 ```
 
 ---
@@ -174,12 +158,12 @@ const { tx, builder } = await buildScallopLeverageTransaction(
 
 | 에러 | 원인 | 해결 |
 |------|------|------|
-| `KeypairRequiredError` | `leverage()` 호출 시 keypair 미제공 | `buildLeverageTransaction` 사용 |
-| `InvalidParameterError` | depositAmount/depositValueUsd 문제 | 하나만 제공 |
+| `InvalidParameterError` | depositAmount/depositValueUsd 문제 | 정확히 하나만 제공 |
+| `InvalidParameterError` | multiplier ≤ 1 또는 protocol max 초과 | 유효 범위 확인 |
 | `UnknownAssetError` | 미인식 자산 심볼 | COIN_TYPES 확인 |
-| `UnsupportedProtocolError` | 프로토콜 미초기화 | `initialize()` 호출 |
+| `UnsupportedProtocolError` | 미지원 프로토콜 | LendingProtocol enum 확인 |
+| `KeypairRequiredError` | `execute()` 시 keypair 미제공 | Browser에서는 wallet adapter 사용 |
 | No swap quotes | DEX에서 경로 없음 | 자산/금액 확인 |
-| Dry run failed | TX 시뮬레이션 실패 | 에러 메시지 확인 |
 
 ---
 

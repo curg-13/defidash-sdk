@@ -5,19 +5,16 @@
  */
 
 import { MetaAg } from "@7kprotocol/sdk-ts";
+import { COIN_TYPES } from "../types";
 import { normalizeCoinType } from "../utils";
 
 // ── Scallop coin-name mapping ────────────────────────────────────────────────
 
 const SCALLOP_COIN_NAME_MAP: Record<string, string> = {
-  "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI":
-    "sui",
-  "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC":
-    "usdc",
-  "0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN":
-    "wusdc",
-  "0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN":
-    "wusdt",
+  [COIN_TYPES.SUI]: "sui",
+  [COIN_TYPES.USDC]: "usdc",
+  [COIN_TYPES.wUSDC]: "wusdc",
+  [COIN_TYPES.wUSDT]: "wusdt",
 };
 
 /**
@@ -32,6 +29,12 @@ export function getScallopCoinName(coinType: string): string {
     "sui"
   );
 }
+
+/**
+ * Buffer multiplier for borrow interest that accrues immediately.
+ * Applied to the flash loan repayment amount to ensure we borrow enough.
+ */
+export const BORROW_FEE_BUFFER = 1.005;
 
 // ── Leverage amount calculations ─────────────────────────────────────────────
 
@@ -54,7 +57,7 @@ export function computeLeverageAmounts(
   initialEquityUsd: number,
   multiplier: number,
   calculateFeeFn: (amount: bigint) => bigint,
-  borrowFeeBuffer = 1.003,
+  borrowFeeBuffer = BORROW_FEE_BUFFER,
 ): LeverageAmounts {
   const flashLoanUsd = initialEquityUsd * (multiplier - 1);
   const flashLoanUsdc = BigInt(Math.ceil(flashLoanUsd * 1e6));
@@ -77,7 +80,7 @@ export interface BestSwapQuote {
 /**
  * Fetch swap quotes and return the best (highest amountOut).
  *
- * @throws if no quotes are returned
+ * @throws if no valid quotes are returned
  */
 export async function findBestSwapQuote(
   swapClient: MetaAg,
@@ -86,11 +89,19 @@ export async function findBestSwapQuote(
   coinTypeOut: string,
   label?: string,
 ): Promise<BestSwapQuote> {
-  const quotes = await swapClient.quote({
-    amountIn,
-    coinTypeIn,
-    coinTypeOut,
-  });
+  let quotes: any[];
+  try {
+    quotes = await swapClient.quote({
+      amountIn,
+      coinTypeIn,
+      coinTypeOut,
+    });
+  } catch (err: any) {
+    const msg = err?.message ?? String(err);
+    throw new Error(
+      `Swap quote failed${label ? ` for ${label}` : ""}: ${msg}`,
+    );
+  }
 
   if (quotes.length === 0) {
     throw new Error(
@@ -98,7 +109,18 @@ export async function findBestSwapQuote(
     );
   }
 
-  const best = quotes.sort(
+  // Filter out quotes with zero output (invalid routes)
+  const validQuotes = quotes.filter(
+    (q: any) => BigInt(q.amountOut) > 0n,
+  );
+
+  if (validQuotes.length === 0) {
+    throw new Error(
+      `All swap quotes returned zero output${label ? ` for ${label}` : ""}`,
+    );
+  }
+
+  const best = [...validQuotes].sort(
     (a: any, b: any) => Number(b.amountOut) - Number(a.amountOut),
   )[0];
 
