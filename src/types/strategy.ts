@@ -4,6 +4,31 @@
 
 import { LendingProtocol } from "./common";
 import { PositionInfo } from "./position";
+import { AssetRiskParams, AssetApy } from "./protocol";
+
+/**
+ * Combined asset leverage information for a specific protocol.
+ * Includes risk parameters and APY data for quick querying.
+ */
+export interface AssetLeverageInfo {
+  /** The lending protocol */
+  protocol: LendingProtocol;
+
+  /** Asset coin type (normalized) */
+  coinType: string;
+
+  /** Asset symbol (e.g., 'SUI', 'LBTC') */
+  symbol: string;
+
+  /** Asset risk parameters (LTV, liquidation threshold, max multiplier) */
+  riskParams: AssetRiskParams;
+
+  /** Asset APY information (supply, borrow, rewards) */
+  apy: AssetApy;
+
+  /** Current token price in USD */
+  priceUsd: number;
+}
 
 /**
  * Result of strategy execution

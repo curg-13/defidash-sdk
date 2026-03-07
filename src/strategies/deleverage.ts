@@ -13,11 +13,11 @@ import { ScallopFlashLoanClient } from "../protocols/scallop/flash-loan";
 import { findBestSwapQuote } from "./common";
 
 /**
- * Slippage tolerance for deleverage swaps (basis points).
- * Higher than leverage because deleverage swaps small collateral → USDC
+ * Default slippage tolerance for deleverage swaps (basis points).
+ * Higher than leverage because deleverage swaps collateral → USDC
  * where price impact and rounding are more significant.
  */
-const DELEVERAGE_SLIPPAGE_BPS = 500; // 5%
+export const DEFAULT_DELEVERAGE_SLIPPAGE_BPS = 500; // 5%
 
 export interface DeleverageBuildParams {
   protocol: ILendingProtocol;
@@ -26,6 +26,11 @@ export interface DeleverageBuildParams {
   suiClient: SuiClient;
   userAddress: string;
   position: PositionInfo;
+  /**
+   * Swap slippage tolerance in basis points (1 bp = 0.01%).
+   * Default: 500 (5%)
+   */
+  slippageBps?: number;
 }
 
 export interface DeleverageEstimate {
@@ -55,7 +60,7 @@ async function buildScallopDeleverageTransaction(
   flashLoanClient: ScallopFlashLoanClient,
   estimate: DeleverageEstimate,
 ): Promise<void> {
-  const { protocol, swapClient, userAddress, position } = params;
+  const { protocol, swapClient, userAddress, position, slippageBps = DEFAULT_DELEVERAGE_SLIPPAGE_BPS } = params;
 
   if (!isScallopProtocol(protocol)) {
     throw new Error("Expected Scallop protocol adapter");
@@ -160,7 +165,7 @@ async function buildScallopDeleverageTransaction(
       coinIn: coinToSwap,
       tx: tx,
     },
-    DELEVERAGE_SLIPPAGE_BPS,
+    slippageBps,
   );
 
   // Step 5: Repay flash loan
@@ -262,6 +267,7 @@ export async function buildDeleverageTransaction(
     suiClient,
     userAddress,
     position,
+    slippageBps = DEFAULT_DELEVERAGE_SLIPPAGE_BPS,
   } = params;
 
   const supplyCoinType = position.collateral.coinType;
@@ -327,7 +333,7 @@ export async function buildDeleverageTransaction(
       coinIn: coinToSwap,
       tx: tx,
     },
-    DELEVERAGE_SLIPPAGE_BPS,
+    slippageBps,
   );
 
   // 6. Repay flash loan

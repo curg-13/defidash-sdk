@@ -23,6 +23,7 @@ import {
   BrowserDeleverageParams,
   FindBestRouteParams,
   LeverageRouteResult,
+  AssetLeverageInfo,
 } from './types';
 
 import { SuilendAdapter } from './protocols/suilend/adapter';
@@ -283,6 +284,7 @@ export class DefiDashSDK {
       depositCoinType: coinType,
       depositAmount,
       multiplier: params.multiplier,
+      slippageBps: params.slippageBps,
     });
   }
 
@@ -338,6 +340,7 @@ export class DefiDashSDK {
       suiClient: this.suiClient,
       userAddress: this.userAddress,
       position,
+      slippageBps: params.slippageBps,
     });
   }
 
@@ -486,6 +489,74 @@ export class DefiDashSDK {
     );
 
     return portfolios;
+  }
+
+  /**
+   * Get combined leverage info for an asset across all protocols.
+   *
+   * Returns risk parameters, APY data, and current price for each protocol.
+   * Useful for comparing leverage opportunities across protocols.
+   *
+   * @param asset - Asset symbol (e.g., 'SUI', 'LBTC') or full coin type
+   * @returns Array of leverage info for each protocol (excludes failed fetches)
+   *
+   * @throws {SDKNotInitializedError} If SDK not initialized
+   *
+   * @example
+   * ```typescript
+   * const infos = await sdk.getAssetLeverageInfo('SUI');
+   *
+   * for (const info of infos) {
+   *   console.log(`${info.protocol}:`);
+   *   console.log(`  Max Multiplier: ${info.riskParams.maxMultiplier.toFixed(2)}x`);
+   *   console.log(`  Supply APY: ${(info.apy.totalSupplyApy * 100).toFixed(2)}%`);
+   *   console.log(`  Borrow APY: ${(info.apy.borrowApy * 100).toFixed(2)}%`);
+   * }
+   * ```
+   */
+  async getAssetLeverageInfo(asset: string): Promise<AssetLeverageInfo[]> {
+    this.ensureInitialized();
+
+    const coinType = this.resolveCoinType(asset);
+    const symbol = coinType.split('::').pop() ?? asset;
+
+    // Fetch price once
+    const priceUsd = await getTokenPrice(coinType);
+
+    const allProtocols = [
+      LendingProtocol.Suilend,
+      LendingProtocol.Navi,
+      LendingProtocol.Scallop,
+    ];
+
+    const results = await Promise.all(
+      allProtocols.map(async (p): Promise<AssetLeverageInfo | null> => {
+        try {
+          const adapter = this.getProtocol(p);
+          const [riskParams, apy] = await Promise.all([
+            adapter.getAssetRiskParams(coinType),
+            adapter.getAssetApy(coinType),
+          ]);
+
+          return {
+            protocol: p,
+            coinType,
+            symbol,
+            riskParams,
+            apy,
+            priceUsd,
+          };
+        } catch (e) {
+          console.warn(
+            `[DefiDashSDK] Failed to fetch leverage info for ${asset} on ${p}:`,
+            e,
+          );
+          return null;
+        }
+      }),
+    );
+
+    return results.filter((r): r is AssetLeverageInfo => r !== null);
   }
 
   // ============================================================================

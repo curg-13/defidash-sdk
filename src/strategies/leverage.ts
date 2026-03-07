@@ -16,6 +16,9 @@ import { ScallopFlashLoanClient } from "../protocols/scallop/flash-loan";
 import { normalizeCoinType, getDecimals } from "../utils";
 import { findBestSwapQuote, BORROW_FEE_BUFFER } from "./common";
 
+/** Default swap slippage for leverage (1%) */
+export const DEFAULT_LEVERAGE_SLIPPAGE_BPS = 100;
+
 export interface LeverageBuildParams {
   protocol: ILendingProtocol;
   flashLoanClient: ScallopFlashLoanClient;
@@ -25,6 +28,11 @@ export interface LeverageBuildParams {
   depositCoinType: string;
   depositAmount: bigint;
   multiplier: number;
+  /**
+   * Swap slippage tolerance in basis points (1 bp = 0.01%).
+   * Default: 100 (1%)
+   */
+  slippageBps?: number;
 }
 
 /**
@@ -95,6 +103,7 @@ export async function buildLeverageTransaction(
     depositCoinType,
     depositAmount,
     multiplier,
+    slippageBps = DEFAULT_LEVERAGE_SLIPPAGE_BPS,
   } = params;
 
   // Reject unsupported coin types (stablecoins like USDC, wUSDC)
@@ -142,8 +151,6 @@ export async function buildLeverageTransaction(
     `USDC \u2192 ${normalized.split("::").pop() ?? normalized}`,
   );
 
-  // TODO(#8): Make slippage configurable via leverage params
-  const SLIPPAGE_BPS = 100; // 1%
   const swappedAsset = await swapClient.swap(
     {
       quote: bestQuote,
@@ -151,7 +158,7 @@ export async function buildLeverageTransaction(
       coinIn: loanCoin,
       tx: tx,
     },
-    SLIPPAGE_BPS,
+    slippageBps,
   );
 
   // 4. Prepare deposit coin (merge user's asset with swapped)

@@ -48,6 +48,7 @@ export type {
   FindBestRouteParams,
   LeverageRoute,
   LeverageRouteResult,
+  AssetLeverageInfo,
 } from './types';
 
 // Types — Position & Portfolio
