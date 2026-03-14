@@ -21,6 +21,7 @@
     "publish:alpha": "npm run build && npm publish --tag alpha",
     "example:leverage": "npx tsx examples/leverage.ts",
     "example:deleverage": "npx tsx examples/deleverage.ts",
+    "example:assetinfo": "npx tsx examples/asset_leverage_info.ts",
     "e2e": "npx tsx scripts/test_all_protocols.ts",
     "e2e:execute": "npx tsx scripts/test_all_protocols.ts --execute",
     "e2e:leverage": "npx tsx scripts/test_all_protocols.ts --leverage-only",

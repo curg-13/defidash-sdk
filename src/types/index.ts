@@ -23,6 +23,7 @@ export type {
   FindBestRouteParams,
   LeverageRoute,
   LeverageRouteResult,
+  AssetLeverageInfo,
 } from "./strategy";
 
 // Configuration types
