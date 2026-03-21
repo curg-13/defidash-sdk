@@ -105,14 +105,17 @@ async function buildScallopDeleverageTransaction(
     });
   }
 
-  // Step 1: Flash loan USDC
+  // Step 1: Refresh oracles (required before withdraw_collateral)
+  await protocol.refreshOracles(tx, [supplyCoinType, borrowCoinType], userAddress);
+
+  // Step 2: Flash loan USDC
   const [loanCoin, receipt] = flashLoanClient.borrowFlashLoan(
     tx,
     estimate.flashLoanUsdc,
     "usdc",
   );
 
-  // Step 2: Repay debt (direct moveCall)
+  // Step 4: Repay debt (direct moveCall)
   tx.moveCall({
     target: `${coreAddresses.protocolPkg}::repay::repay`,
     typeArguments: [borrowCoinType],
@@ -125,7 +128,7 @@ async function buildScallopDeleverageTransaction(
     ],
   });
 
-  // Step 3: Withdraw collateral (direct moveCall)
+  // Step 5: Withdraw collateral (direct moveCall)
   const [withdrawnCoin] = tx.moveCall({
     target: `${coreAddresses.protocolPkg}::withdraw_collateral::withdraw_collateral`,
     typeArguments: [supplyCoinType],
@@ -141,7 +144,7 @@ async function buildScallopDeleverageTransaction(
     ],
   });
 
-  // Step 4: Get swap quote and swap
+  // Step 6: Get swap quote and swap
   const { quote: bestQuote } = await findBestSwapQuote(
     swapClient,
     estimate.swapAmount.toString(),
@@ -163,12 +166,12 @@ async function buildScallopDeleverageTransaction(
     DELEVERAGE_SLIPPAGE_BPS,
   );
 
-  // Step 5: Repay flash loan
+  // Step 7: Repay flash loan
   // Sui SDK splitCoins/transferObjects require `any` casts for swap client return types
   const flashRepayCoins = tx.splitCoins(swappedUsdc as any, [estimate.totalRepayment]);
   flashLoanClient.repayFlashLoan(tx, flashRepayCoins, receipt, "usdc");
 
-  // Step 6: Transfer remaining to user
+  // Step 8: Transfer remaining to user
   tx.transferObjects([withdrawnCoin as any, swappedUsdc as any], userAddress);
 }
 
